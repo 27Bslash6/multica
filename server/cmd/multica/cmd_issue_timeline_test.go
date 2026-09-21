@@ -483,3 +483,22 @@ func TestRunIssueTimelineEmptyResultPrintsEmptyJSONArray(t *testing.T) {
 		t.Fatalf("entries = %v, want empty", entries)
 	}
 }
+
+func TestSingleLineText(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{"whitespace collapses", "a \n\t b", "a b"},
+		{"C0 escape stripped", "failed \x1b[2K\x1b[1Gcompleted", "failed [2K [1Gcompleted"},
+		{"NUL and BEL stripped", "a\x00b\x07c", "a b c"},
+		{"C1 control stripped", "a\u0085b", "a b"},
+		{"bidi override stripped", "a\u202eb\u2066c", "a b c"},
+		{"zwj emoji sequence intact", "\U0001f469\u200d\U0001f4bb", "\U0001f469\u200d\U0001f4bb"},
+		{"zwnj joined script intact", "\u0645\u06cc\u200c\u0631\u0648\u0645", "\u0645\u06cc\u200c\u0631\u0648\u0645"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := singleLineText(tt.in); got != tt.want {
+				t.Fatalf("singleLineText(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

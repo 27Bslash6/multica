@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -334,8 +335,22 @@ func hasAnyKey(m map[string]any, keys ...string) bool {
 	return false
 }
 
+// singleLineText collapses s onto one line for a table cell. Besides
+// whitespace it drops control characters (C0/C1, so a raw ESC sequence in
+// stored error text cannot repaint the terminal) and bidi override/isolate
+// characters (which can reorder what the reader sees). Format characters
+// such as ZWJ/ZWNJ are kept: they hold emoji sequences and joined scripts
+// together. Display-only: persisted text and JSON output are untouched.
 func singleLineText(s string) string {
-	return strings.Join(strings.Fields(s), " ")
+	return strings.Join(strings.FieldsFunc(s, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r) || isBidiOverride(r)
+	}), " ")
+}
+
+// isBidiOverride reports the Unicode bidi embedding/override (U+202A–U+202E)
+// and isolate (U+2066–U+2069) controls.
+func isBidiOverride(r rune) bool {
+	return (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069)
 }
 
 func clipTimelineText(s string, max int) string {

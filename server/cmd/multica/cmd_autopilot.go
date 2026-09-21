@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -704,7 +705,7 @@ func runAutopilotRuns(cmd *cobra.Command, args []string) error {
 		return cli.PrintJSON(os.Stdout, resp)
 	}
 
-	headers := []string{"ID", "SOURCE", "STATUS", "ISSUE", "TRIGGERED_AT", "COMPLETED_AT", "FAILURE"}
+	headers := []string{"ID", "SOURCE", "STATUS", "ISSUE", "TRIGGERED_AT", "COMPLETED_AT", "REASON"}
 	rows := make([][]string, 0, len(resp.Runs))
 	for _, r := range resp.Runs {
 		rows = append(rows, []string{
@@ -721,25 +722,35 @@ func runAutopilotRuns(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// autopilotRunFailureMaxWidth bounds the FAILURE cell so one long upstream
-// error cannot push the rest of the table off screen. The full text stays
-// available under --output json.
+// autopilotRunFailureMaxWidth bounds the REASON cell, in runes. The cell is
+// the last column so it never shifts the others; the bound is about how much
+// of a long upstream error is worth showing before the row wraps. The full
+// text stays available under --output json.
 const autopilotRunFailureMaxWidth = 80
 
-// autopilotRunFailureCell renders why a run failed in the runs table, in the
-// same "reason [code]" shape runAutopilotTrigger uses, so the two paths never
-// disagree about how a failure reads. A bare "failed" with no cause forces a
-// second command; the reason is already in the response, so show it.
-// Non-failed rows render an empty cell.
+// autopilotRunFailureCell renders why a run did not succeed, as
+// "reason [code]", the same fields runAutopilotTrigger reports on its error
+// path. A bare "failed" with no cause forces a second command; the reason
+// is already in the response, so show it. Only failed and skipped runs
+// carry a meaningful reason: a run finalized as completed keeps any earlier
+// failure_reason, so every other status renders an empty cell.
 func autopilotRunFailureCell(run map[string]any) string {
-	if strVal(run, "status") != "failed" {
+	if s := strVal(run, "status"); s != "failed" && s != "skipped" {
 		return ""
 	}
 	msg := strVal(run, "failure_reason")
+	suffix := ""
 	if code := strVal(run, "reason_code"); code != "" {
-		msg += " [" + code + "]"
+		suffix = " [" + code + "]"
 	}
-	return clipTimelineText(singleLineText(msg), autopilotRunFailureMaxWidth)
+	// Reserve the code's width first so the cell never exceeds the bound and
+	// the stable classification survives even when the prose is clipped.
+	budget := autopilotRunFailureMaxWidth - utf8.RuneCountInString(suffix)
+	if budget < 1 {
+		// clipTimelineText returns its input unclipped for max <= 0.
+		return clipTimelineText(singleLineText(msg+suffix), autopilotRunFailureMaxWidth)
+	}
+	return strings.TrimSpace(clipTimelineText(singleLineText(msg), budget) + suffix)
 }
 
 func runAutopilotTriggerList(cmd *cobra.Command, args []string) error {
