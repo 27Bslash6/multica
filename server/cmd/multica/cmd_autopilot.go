@@ -704,7 +704,7 @@ func runAutopilotRuns(cmd *cobra.Command, args []string) error {
 		return cli.PrintJSON(os.Stdout, resp)
 	}
 
-	headers := []string{"ID", "SOURCE", "STATUS", "ISSUE", "TRIGGERED_AT", "COMPLETED_AT"}
+	headers := []string{"ID", "SOURCE", "STATUS", "ISSUE", "TRIGGERED_AT", "COMPLETED_AT", "FAILURE"}
 	rows := make([][]string, 0, len(resp.Runs))
 	for _, r := range resp.Runs {
 		rows = append(rows, []string{
@@ -714,10 +714,32 @@ func runAutopilotRuns(cmd *cobra.Command, args []string) error {
 			strVal(r, "issue_id"),
 			strVal(r, "triggered_at"),
 			strVal(r, "completed_at"),
+			autopilotRunFailureCell(r),
 		})
 	}
 	cli.PrintTable(os.Stdout, headers, rows)
 	return nil
+}
+
+// autopilotRunFailureMaxWidth bounds the FAILURE cell so one long upstream
+// error cannot push the rest of the table off screen. The full text stays
+// available under --output json.
+const autopilotRunFailureMaxWidth = 80
+
+// autopilotRunFailureCell renders why a run failed in the runs table, in the
+// same "reason [code]" shape runAutopilotTrigger uses, so the two paths never
+// disagree about how a failure reads. A bare "failed" with no cause forces a
+// second command; the reason is already in the response, so show it.
+// Non-failed rows render an empty cell.
+func autopilotRunFailureCell(run map[string]any) string {
+	if strVal(run, "status") != "failed" {
+		return ""
+	}
+	msg := strVal(run, "failure_reason")
+	if code := strVal(run, "reason_code"); code != "" {
+		msg += " [" + code + "]"
+	}
+	return clipTimelineText(singleLineText(msg), autopilotRunFailureMaxWidth)
 }
 
 func runAutopilotTriggerList(cmd *cobra.Command, args []string) error {
