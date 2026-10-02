@@ -7,9 +7,9 @@ import type { InboxItem, InboxWorkspaceUnread } from "../types";
 
 export const inboxKeys = {
   all: (wsId: string) => ["inbox", wsId] as const,
-  // Every cache of a view's rows nests under that view's prefix — the legacy
-  // array, the pages and the deep-link lookups — so one prefix patches or
-  // refreshes the whole view. Facets hold counts, not rows, so they sit
+  // Every cache of a view's rows nests under that view's prefix — the pages
+  // and the deep-link lookups — so one prefix patches or refreshes the whole
+  // view. Facets hold counts, not rows, so they sit
   // outside both prefixes.
   list: (wsId: string) => [...inboxKeys.all(wsId), "list"] as const,
   listPages: (wsId: string) => [...inboxKeys.list(wsId), "pages"] as const,
@@ -23,30 +23,6 @@ export const inboxKeys = {
   // holds unread counts for every workspace the user belongs to.
   unreadSummary: () => ["inbox", "unread-summary"] as const,
 };
-
-/**
- * @deprecated Legacy unbounded array of every active notification row. New
- * consumers must use inboxPagesOptions. Retained for compatibility with legacy
- * cache consumers.
- */
-export function inboxListOptions(wsId: string) {
-  return queryOptions({
-    queryKey: inboxKeys.list(wsId),
-    queryFn: () => api.listInbox(),
-  });
-}
-
-/**
- * @deprecated Legacy array endpoint, capped at 200 groups. New archive
- * consumers must use archivedInboxPagesOptions for the complete archive.
- * Retained for compatibility with legacy cache consumers.
- */
-export function archivedInboxListOptions(wsId: string) {
-  return queryOptions({
-    queryKey: inboxKeys.archived(wsId),
-    queryFn: () => api.listArchivedInbox(),
-  });
-}
 
 function normalizedInboxFilters(filters: InboxFilters): InboxFilters {
   return { statuses: [...filters.statuses].sort(), priorities: [...filters.priorities].sort(),
@@ -112,16 +88,15 @@ export function archivedInboxFacetsOptions(wsId: string, filters: InboxFilters) 
   });
 }
 
-/** Any cache of one view's rows: the legacy array, a lookup page, or the pages. */
-export type InboxCache = InboxItem[] | InboxPage | InfiniteData<InboxPage>;
+/** Any cache of one view's rows: a lookup page, or the pages. */
+export type InboxCache = InboxPage | InfiniteData<InboxPage>;
 
 /**
  * Apply an items patch to any row cache. A patch that returns its input
- * unchanged leaves the cache's identity intact, as it does for the legacy
- * array, so an issue event that touches no loaded row re-renders nothing.
+ * unchanged leaves the cache's identity intact, so an issue event that
+ * touches no loaded row re-renders nothing.
  */
 export function mapInboxCache(data: InboxCache, patch: (items: InboxItem[]) => InboxItem[]): InboxCache {
-  if (Array.isArray(data)) return patch(data);
   if ("pages" in data) {
     let changed = false;
     const pages = data.pages.map((page) => {
@@ -138,7 +113,6 @@ export function mapInboxCache(data: InboxCache, patch: (items: InboxItem[]) => I
 
 /** Every loaded row of any row cache. */
 export function inboxCacheItems(data: InboxCache): InboxItem[] {
-  if (Array.isArray(data)) return data;
   return "pages" in data ? data.pages.flatMap((page) => page.items) : data.items;
 }
 

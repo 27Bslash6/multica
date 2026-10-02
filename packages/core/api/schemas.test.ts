@@ -38,7 +38,6 @@ import {
   EMPTY_CHAT_SESSION,
   EMPTY_PRIORITIZE_QUEUED_CHAT_TASK_RESPONSE,
   EMPTY_CREATE_FEEDBACK_RESPONSE,
-  EMPTY_INBOX_ITEMS,
   EMPTY_INBOX_UNREAD_SUMMARY,
   EMPTY_SEARCH_PROJECTS_RESPONSE,
   EMPTY_USER,
@@ -75,6 +74,7 @@ import {
   EMPTY_ISSUE_STATUS_ENTRY,
 } from "./schemas";
 import { parseWithFallback } from "./schema";
+import type { InboxItem } from "../types";
 
 const baseIssue = {
   id: "11111111-1111-1111-1111-111111111111",
@@ -1419,7 +1419,8 @@ describe("InboxUnreadSummarySchema", () => {
 });
 
 describe("InboxItemListSchema", () => {
-  const ENDPOINT = { endpoint: "GET /api/inbox/archived" };
+  const ENDPOINT = { endpoint: "GET /api/inbox/archived/page" };
+  const NO_INBOX_ITEMS: InboxItem[] = [];
 
   const row = (overrides: Record<string, unknown> = {}) => ({
     id: "inbox-1",
@@ -1446,7 +1447,7 @@ describe("InboxItemListSchema", () => {
         future_field: 1,
       })],
       InboxItemListSchema,
-      EMPTY_INBOX_ITEMS,
+      NO_INBOX_ITEMS,
       ENDPOINT,
     );
     expect(parsed).toHaveLength(1);
@@ -1464,7 +1465,7 @@ describe("InboxItemListSchema", () => {
     const parsed = parseWithFallback(
       [row({ type: "some_future_type", severity: "future_severity" })],
       InboxItemListSchema,
-      EMPTY_INBOX_ITEMS,
+      NO_INBOX_ITEMS,
       ENDPOINT,
     );
     expect(parsed).toHaveLength(1);
@@ -1475,7 +1476,7 @@ describe("InboxItemListSchema", () => {
     void body;
     void issue_id;
     expect(
-      parseWithFallback([withoutOptionals], InboxItemListSchema, EMPTY_INBOX_ITEMS, ENDPOINT),
+      parseWithFallback([withoutOptionals], InboxItemListSchema, NO_INBOX_ITEMS, ENDPOINT),
     ).toHaveLength(1);
   });
 
@@ -1484,27 +1485,27 @@ describe("InboxItemListSchema", () => {
       parseWithFallback(
         [row({ issue_priority: 3 })],
         InboxItemListSchema,
-        EMPTY_INBOX_ITEMS,
+        NO_INBOX_ITEMS,
         ENDPOINT,
       ),
-    ).toBe(EMPTY_INBOX_ITEMS);
+    ).toBe(NO_INBOX_ITEMS);
   });
 
   it("returns the empty fallback for a non-array body", () => {
     expect(
-      parseWithFallback({ items: [] }, InboxItemListSchema, EMPTY_INBOX_ITEMS, ENDPOINT),
-    ).toBe(EMPTY_INBOX_ITEMS);
+      parseWithFallback({ items: [] }, InboxItemListSchema, NO_INBOX_ITEMS, ENDPOINT),
+    ).toBe(NO_INBOX_ITEMS);
     expect(
-      parseWithFallback(null, InboxItemListSchema, EMPTY_INBOX_ITEMS, ENDPOINT),
-    ).toBe(EMPTY_INBOX_ITEMS);
+      parseWithFallback(null, InboxItemListSchema, NO_INBOX_ITEMS, ENDPOINT),
+    ).toBe(NO_INBOX_ITEMS);
   });
 
   it("returns the empty fallback when a row is missing a required field", () => {
     const { id, ...withoutId } = row();
     void id;
     expect(
-      parseWithFallback([withoutId], InboxItemListSchema, EMPTY_INBOX_ITEMS, ENDPOINT),
-    ).toBe(EMPTY_INBOX_ITEMS);
+      parseWithFallback([withoutId], InboxItemListSchema, NO_INBOX_ITEMS, ENDPOINT),
+    ).toBe(NO_INBOX_ITEMS);
   });
 
   it("returns the empty fallback when `archived` is wrong-typed", () => {
@@ -1512,10 +1513,10 @@ describe("InboxItemListSchema", () => {
       parseWithFallback(
         [row({ archived: "yes" })],
         InboxItemListSchema,
-        EMPTY_INBOX_ITEMS,
+        NO_INBOX_ITEMS,
         ENDPOINT,
       ),
-    ).toBe(EMPTY_INBOX_ITEMS);
+    ).toBe(NO_INBOX_ITEMS);
   });
 });
 

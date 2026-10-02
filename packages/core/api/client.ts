@@ -397,10 +397,8 @@ import {
   EMPTY_CREATE_FEEDBACK_RESPONSE,
   InboxUnreadSummarySchema,
   EMPTY_INBOX_UNREAD_SUMMARY,
-  InboxItemListSchema,
   InboxPageSchema,
   InboxFacetsSchema,
-  EMPTY_INBOX_ITEMS,
   NotificationPreferenceResponseSchema,
   EMPTY_NOTIFICATION_PREFERENCE_RESPONSE,
   LabelSchema,
@@ -2854,17 +2852,6 @@ export class ApiClient {
   }
 
   // Inbox
-  /**
-   * @deprecated Unbounded legacy array of every active notification row.
-   * Use listInboxPage. Retained for compatibility.
-   */
-  async listInbox(): Promise<InboxItem[]> {
-    const raw = await this.fetch<unknown>("/api/inbox");
-    return parseWithFallback(raw, InboxItemListSchema, EMPTY_INBOX_ITEMS, {
-      endpoint: "GET /api/inbox",
-    });
-  }
-
   async markInboxRead(id: string): Promise<InboxItem> {
     return this.fetch(`/api/inbox/${id}/read`, { method: "POST" });
   }
@@ -2875,16 +2862,6 @@ export class ApiClient {
 
   async archiveInbox(id: string): Promise<InboxItem> {
     return this.fetch(`/api/inbox/${id}/archive`, { method: "POST" });
-  }
-
-  // Archived notifications, backing the inbox's "Archived" sub-view. Capped
-  // server-side (no pagination in v1). Schema-guarded so a contract drift
-  // renders an empty archive instead of taking the inbox down with it.
-  async listArchivedInbox(): Promise<InboxItem[]> {
-    const raw = await this.fetch<unknown>("/api/inbox/archived");
-    return parseWithFallback(raw, InboxItemListSchema, EMPTY_INBOX_ITEMS, {
-      endpoint: "GET /api/inbox/archived",
-    });
   }
 
   private inboxFilterParams(filters: InboxFilters): URLSearchParams {

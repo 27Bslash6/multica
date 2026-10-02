@@ -47,7 +47,6 @@ import type {
   GroupedIssuesResponse,
   GitHubConnectResponse,
   IssuePullRequestsResponse,
-  InboxItem,
   InboxWorkspaceUnread,
   Label,
   MemberWithUser,
@@ -2608,15 +2607,13 @@ export const InboxUnreadSummarySchema = z.array(
 export const EMPTY_INBOX_UNREAD_SUMMARY: InboxWorkspaceUnread[] = [];
 
 // ---------------------------------------------------------------------------
-// Inbox items (`/api/inbox` and `/api/inbox/archived` GET).
+// Inbox rows, as the paged inbox endpoints return them.
 // Lenient per the usual rules: `severity` / `type` / `recipient_type` stay
 // `z.string()` so a notification kind this client doesn't know yet still
 // parses and renders (the UI's type-label lookup already tolerates unknown
 // kinds). Nullable optional fields are declared optional as well, since older
-// rows can omit them entirely. On malformed JSON parseWithFallback returns the
-// empty list — the affected view then reads as empty rather than white-
-// screening the inbox. Both endpoints share this boundary because they return
-// the same row shape and both feed the status/priority filter UI.
+// rows can omit them entirely. Both views share this boundary because they
+// return the same row shape and both feed the status/priority filter UI.
 // ---------------------------------------------------------------------------
 
 export const InboxItemListSchema = z.array(
@@ -2641,9 +2638,9 @@ export const InboxItemListSchema = z.array(
 );
 
 // One page of the paged inbox endpoints, active (`/api/inbox/page`) and
-// archived (`/api/inbox/archived/page`) alike. Unlike the arrays above, a
-// malformed page has no fallback: the caller throws, so the view shows a retry
-// instead of reading as an empty inbox.
+// archived (`/api/inbox/archived/page`) alike. A malformed page has no
+// fallback: the caller throws, so the view shows a retry instead of reading as
+// an empty inbox.
 export const InboxPageSchema = z.object({
   items: InboxItemListSchema,
   next_cursor: z.string().min(1).nullable(),
@@ -2661,8 +2658,6 @@ export const InboxFacetsSchema = z.object({
   statuses: facets.statuses, priorities: facets.priorities,
   actors: facets.actors, unreadCount: facets.unread_count,
 }));
-
-export const EMPTY_INBOX_ITEMS: InboxItem[] = [];
 
 // ---------------------------------------------------------------------------
 // Billing schemas (cloud-billing proxy surface)

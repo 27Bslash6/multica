@@ -562,20 +562,16 @@ export function applyIssueChange(
         row.issue_id === id && row.issue_priority !== undefined && row.issue_priority !== patch.priority))
     );
     if (statusChanged || priorityChanged) {
-      // Its pages and lookups end with their filters (the legacy array has
-      // none), and only a selection on the changed field can gain or lose a
-      // group; every other loaded row is fully corrected by the patch below —
-      // unless a next page is out: it appends to the pages it read before this
-      // patch, so it would put the old projection back. A refetch reads every
-      // page anew and is left to run, so a stream of issue events cannot keep
-      // restarting it.
-      const listPrefixLength = inboxKeys.list(wsId).length;
+      // Its pages and lookups end with their filters, and only a selection on
+      // the changed field can gain or lose a group; every other loaded row is
+      // fully corrected by the patch below — unless a next page is out: it
+      // appends to the pages it read before this patch, so it would put the
+      // old projection back. A refetch reads every page anew and is left to
+      // run, so a stream of issue events cannot keep restarting it.
       staleKeys.push(...qc.getQueryCache().findAll({ queryKey: inboxKeys.list(wsId) })
         .filter(({ queryKey, state }) => {
           if (state.fetchStatus !== "idle" && state.fetchMeta?.fetchMore) return true;
-          const filters = queryKey.length > listPrefixLength
-            ? queryKey[queryKey.length - 1] as Partial<InboxFilters> | undefined
-            : undefined;
+          const filters = queryKey[queryKey.length - 1] as Partial<InboxFilters> | undefined;
           return (statusChanged && !!filters?.statuses?.length) ||
             (priorityChanged && !!filters?.priorities?.length);
         })
