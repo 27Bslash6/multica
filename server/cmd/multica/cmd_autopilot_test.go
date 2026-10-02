@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -1099,4 +1100,120 @@ func TestAutopilotTriggerRequestError_SurfacesRefusalToTheUser(t *testing.T) {
 			t.Errorf("output = %q, must not echo an un-opted-in 403 body", got)
 		}
 	})
+}
+
+func newAutopilotRunsTestCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "runs"}
+	cmd.Flags().Int("limit", 20, "")
+	cmd.Flags().Int("offset", 0, "")
+	cmd.Flags().String("output", "table", "")
+	return cmd
+}
+
+func TestRunAutopilotRunsTableShowsFailureReason(t *testing.T) {
+	const autopilotID = "11111111-1111-1111-1111-111111111111"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/autopilots/"+autopilotID+"/runs" {
+			t.Fatalf("request = %s %s, want GET /api/autopilots/%s/runs", r.Method, r.URL.Path, autopilotID)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"runs": []map[string]any{
+				{
+					"id":             "22222222-2222-2222-2222-222222222222",
+					"source":         "schedule",
+					"status":         "failed",
+					"triggered_at":   "2026-09-21T03:23:26Z",
+					"completed_at":   "2026-09-21T03:28:40Z",
+					"failure_reason": "upstream request rejected (429)",
+					"reason_code":    "provider_error",
+				},
+				{
+					"id":             "33333333-3333-3333-3333-333333333333",
+					"source":         "schedule",
+					"status":         "completed",
+					"triggered_at":   "2026-09-21T04:23:26Z",
+					"completed_at":   "2026-09-21T04:28:40Z",
+					"failure_reason": "stale reason from an earlier attempt",
+					"reason_code":    "stale_code",
+				},
+				{
+					"id":             "44444444-4444-4444-4444-444444444444",
+					"source":         "schedule",
+					"status":         "skipped",
+					"triggered_at":   "2026-09-21T05:23:26Z",
+					"completed_at":   "2026-09-21T05:23:27Z",
+					"failure_reason": "runtime offline",
+					"reason_code":    "runtime_unavailable",
+				},
+			},
+			"total": 3,
+		})
+	}))
+	defer srv.Close()
+
+	setCLITestServerEnv(t, srv.URL)
+
+	out, err := captureStdout(t, func() error {
+		return runAutopilotRuns(newAutopilotRunsTestCmd(), []string{autopilotID})
+	})
+	if err != nil {
+		t.Fatalf("runAutopilotRuns: %v", err)
+	}
+
+	for _, want := range []string{"REASON", "upstream request rejected (429) [provider_error]", "runtime offline [runtime_unavailable]", "completed"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("table output missing %q:\n%s", want, out)
+		}
+	}
+	for _, stale := range []string{"stale reason", "stale_code"} {
+		if strings.Contains(out, stale) {
+			t.Fatalf("completed row must not render its stale reason %q:\n%s", stale, out)
+		}
+	}
+}
+
+func TestAutopilotRunFailureCell(t *testing.T) {
+	long := strings.Repeat("x", autopilotRunFailureMaxWidth+1)
+	atLimit := strings.Repeat("x", autopilotRunFailureMaxWidth)
+
+	tests := []struct {
+		name string
+		run  map[string]any
+		want string
+	}{
+		{"completed hides stale reason", map[string]any{"status": "completed", "failure_reason": "stale", "reason_code": "x_err"}, ""},
+		{"running hides reason", map[string]any{"status": "running", "failure_reason": "stale"}, ""},
+		{"skipped shows reason", map[string]any{"status": "skipped", "failure_reason": "quota", "reason_code": "quota_exhausted"}, "quota [quota_exhausted]"},
+		{"reason only", map[string]any{"status": "failed", "failure_reason": "boom"}, "boom"},
+		{"reason and code", map[string]any{"status": "failed", "failure_reason": "boom", "reason_code": "x_err"}, "boom [x_err]"},
+		{"code only", map[string]any{"status": "failed", "reason_code": "x_err"}, "[x_err]"},
+		{"newlines collapse", map[string]any{"status": "failed", "failure_reason": "line one\n  line two"}, "line one line two"},
+		{"at width kept", map[string]any{"status": "failed", "failure_reason": atLimit}, atLimit},
+		{"over width clipped", map[string]any{"status": "failed", "failure_reason": long}, atLimit[:autopilotRunFailureMaxWidth-3] + "..."},
+		{
+			"code survives a long reason within the bound",
+			map[string]any{"status": "failed", "failure_reason": long, "reason_code": "runtime_profile_missing"},
+			atLimit[:autopilotRunFailureMaxWidth-len(" [runtime_profile_missing]")-3] + "... [runtime_profile_missing]",
+		},
+		{
+			"oversized code falls back to the plain bound",
+			map[string]any{"status": "failed", "failure_reason": "boom", "reason_code": strings.Repeat("c", autopilotRunFailureMaxWidth)},
+			("boom [" + strings.Repeat("c", autopilotRunFailureMaxWidth))[:autopilotRunFailureMaxWidth-3] + "...",
+		},
+		{"terminal controls stripped", map[string]any{"status": "failed", "failure_reason": "failed \x1b[2K\x1b[1Gcompleted"}, "failed [2K [1Gcompleted"},
+		{"bidi override stripped", map[string]any{"status": "failed", "failure_reason": "a\u202eb"}, "a b"},
+		{"zwj sequence kept", map[string]any{"status": "failed", "failure_reason": "\U0001f469\u200d\U0001f4bb"}, "\U0001f469\u200d\U0001f4bb"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := autopilotRunFailureCell(tt.run)
+			if got != tt.want {
+				t.Fatalf("autopilotRunFailureCell() = %q, want %q", got, tt.want)
+			}
+			if n := utf8.RuneCountInString(got); n > autopilotRunFailureMaxWidth {
+				t.Fatalf("cell is %d runes, bound is %d", n, autopilotRunFailureMaxWidth)
+			}
+		})
+	}
 }
