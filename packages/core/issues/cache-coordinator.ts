@@ -541,10 +541,13 @@ export function applyIssueChange(
     ];
     // Membership and facets are server-owned; callers refresh after commit.
     // Full issue events also carry unchanged status/priority on title edits.
-    const archiveProjectionChanged =
+    // The archived view stays eager: it is rarely mounted, so treating a
+    // missing copy as "may be stale" costs little there. Do not merge this
+    // rule with the active view's, which must only count known changes.
+    const archivedMayBeStale =
       (patch.status !== undefined && (changed.status || !prevIssue || prevIssue.status !== patch.status)) ||
       (patch.priority !== undefined && (!prevIssue || prevIssue.priority !== patch.priority));
-    if (archiveProjectionChanged) {
+    if (archivedMayBeStale) {
       staleKeys.push(...qc.getQueryCache().findAll({ queryKey: inboxKeys.archived(wsId) })
         .filter((query) => query.queryKey.length > inboxKeys.archived(wsId).length)
         .map((query) => query.queryKey));
@@ -553,8 +556,8 @@ export function applyIssueChange(
     // The active view stays open, and issue events arrive far more often than
     // notifications, so it re-reads only on a real change. Most issues an
     // event names are in no issue cache, so a missing copy is not a change:
-    // status follows the write's own flag, and priority a loaded copy of the
-    // issue, an inbox row or the issue itself, that holds another value.
+    // status follows the write's own flag, and priority a cached copy of the
+    // issue or a loaded inbox row that holds another value.
     const statusChanged = patch.status !== undefined && changed.status;
     const priorityChanged = patch.priority !== undefined && (
       (prevIssue !== undefined && prevIssue.priority !== patch.priority) ||

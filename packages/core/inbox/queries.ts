@@ -183,7 +183,7 @@ export function unreadCountForWorkspace(
  * Read from the cross-workspace summary, NOT from the inbox list. The summary
  * is one small server-computed row per workspace and the sidebar already
  * fetches it for the workspace-switcher dot, so the badge costs no request of
- * its own; deriving it from `listInbox()` instead downloaded the entire
+ * its own; deriving it from the full inbox list instead downloaded the entire
  * unbounded inbox on every app start just to render a number (MUL-6967).
  *
  * `GET /api/inbox/unread-count` is deliberately not the source: it counts raw

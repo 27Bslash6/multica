@@ -271,7 +271,7 @@ describe("active inbox pagination", () => {
     qc.clear();
   });
 
-  it("re-reads a priority-filtered page when a loaded copy of the issue holds another priority", () => {
+  it("re-reads a priority-filtered page when an inbox row or a cached issue holds another priority", () => {
     const { qc } = setup();
     const byStatus = inboxPagesOptions("ws", statusFiltered).queryKey;
     const byPriority = inboxPagesOptions("ws", priorityFiltered).queryKey;
