@@ -11,7 +11,7 @@ import {
   type IssueSortParam,
   type MyIssuesFilter,
 } from "./queries";
-import { inboxKeys, type InboxCache } from "../inbox/queries";
+import { inboxCacheItems, inboxKeys, type InboxCache } from "../inbox/queries";
 import type { InboxFilters } from "../inbox/filter-store";
 import { patchInboxIssueProjection } from "../inbox/ws-updaters";
 import { projectKeys } from "../projects/queries";
@@ -541,23 +541,34 @@ export function applyIssueChange(
     ];
     // Membership and facets are server-owned; callers refresh after commit.
     // Full issue events also carry unchanged status/priority on title edits.
-    const statusChanged =
-      patch.status !== undefined && (changed.status || !prevIssue || prevIssue.status !== patch.status);
-    const priorityChanged =
-      patch.priority !== undefined && (!prevIssue || prevIssue.priority !== patch.priority);
-    if (statusChanged || priorityChanged) {
+    const archiveProjectionChanged =
+      (patch.status !== undefined && (changed.status || !prevIssue || prevIssue.status !== patch.status)) ||
+      (patch.priority !== undefined && (!prevIssue || prevIssue.priority !== patch.priority));
+    if (archiveProjectionChanged) {
       staleKeys.push(...qc.getQueryCache().findAll({ queryKey: inboxKeys.archived(wsId) })
         .filter((query) => query.queryKey.length > inboxKeys.archived(wsId).length)
         .map((query) => query.queryKey));
       staleKeys.push(...qc.getQueryCache().findAll({ queryKey: inboxKeys.facets(wsId) }).map((query) => query.queryKey));
-      // The active view stays open, and issue fields change far more often
-      // than notifications arrive. Its pages and lookups end with their
-      // filters (the legacy array has none), and only a selection on the
-      // changed field can gain or lose a group; every other loaded row is
-      // fully corrected by the patch below — unless a next page is out: it
-      // appends to the pages it read before this patch, so it would put the
-      // old projection back. A refetch reads every page anew and is left to
-      // run, so a stream of issue events cannot keep restarting it.
+    }
+    // The active view stays open, and issue events arrive far more often than
+    // notifications, so it re-reads only on a real change. Most issues an
+    // event names are in no issue cache, so a missing copy is not a change:
+    // status follows the write's own flag, and priority a loaded copy of the
+    // issue, an inbox row or the issue itself, that holds another value.
+    const statusChanged = patch.status !== undefined && changed.status;
+    const priorityChanged = patch.priority !== undefined && (
+      (prevIssue !== undefined && prevIssue.priority !== patch.priority) ||
+      prevInboxCaches.some(([, data]) => !!data && inboxCacheItems(data).some((row) =>
+        row.issue_id === id && row.issue_priority !== undefined && row.issue_priority !== patch.priority))
+    );
+    if (statusChanged || priorityChanged) {
+      // Its pages and lookups end with their filters (the legacy array has
+      // none), and only a selection on the changed field can gain or lose a
+      // group; every other loaded row is fully corrected by the patch below —
+      // unless a next page is out: it appends to the pages it read before this
+      // patch, so it would put the old projection back. A refetch reads every
+      // page anew and is left to run, so a stream of issue events cannot keep
+      // restarting it.
       const listPrefixLength = inboxKeys.list(wsId).length;
       staleKeys.push(...qc.getQueryCache().findAll({ queryKey: inboxKeys.list(wsId) })
         .filter(({ queryKey, state }) => {

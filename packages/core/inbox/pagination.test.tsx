@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
-import type { InboxPage, InboxItem } from "../types";
+import type { InboxPage, InboxItem, Issue } from "../types";
+import { issueKeys } from "../issues/queries";
 import { issueChangedDims } from "../issues/surface/membership";
 import { applyIssueChange, rollbackIssueChange, invalidateStaleListKeys } from "../issues/cache-coordinator";
 import { EMPTY_INBOX_FILTERS } from "./filter-store";
@@ -222,6 +223,69 @@ describe("active inbox pagination", () => {
     rollbackIssueChange(qc, "ws", "target", result);
     expect(qc.getQueryData(byStatus)).toEqual(twoPages());
     expect(qc.getQueryData<InboxPage>(lookup)?.items[0]?.issue_status).toBe("done");
+    qc.clear();
+  });
+
+  // A full issue event repeats the issue's unchanged status and priority, and
+  // its flags say no membership field moved.
+  const titleEdit = { title: "renamed", status: "done", priority: "high" } as const;
+  const noFieldMoved = { assignee: false, project: false, status: false };
+  const priorityFiltered = { ...EMPTY_INBOX_FILTERS, priorities: ["high" as const] };
+
+  it.each([["status", statusFiltered], ["priority", priorityFiltered]])(
+    "leaves a %s-filtered page alone on a title edit of an issue no issue cache holds",
+    async (_field, filters) => {
+      const { qc, wrapper } = setup();
+      const key = inboxPagesOptions("ws", filters).queryKey;
+      const listInboxPage = vi.fn(async () => page([active("first"), active("target")]));
+      setApiInstance({ listInboxPage } as unknown as ApiClient);
+      const { result, unmount } = renderHook(() => useInfiniteQuery(inboxPagesOptions("ws", filters)), { wrapper });
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      const cancel = vi.spyOn(qc, "cancelQueries");
+      act(() => {
+        // One issue with loaded inbox rows, one with none.
+        for (const id of ["target", "elsewhere"]) {
+          const change = applyIssueChange(qc, "ws", id, titleEdit, { changed: noFieldMoved });
+          expect(change.staleKeys).not.toContainEqual(key);
+          invalidateStaleListKeys(qc, change.staleKeys);
+        }
+      });
+      expect(cancel).not.toHaveBeenCalled();
+      expect(qc.getQueryState(key)?.isInvalidated).toBe(false);
+      expect(qc.getQueryState(key)?.fetchStatus).toBe("idle");
+      expect(listInboxPage).toHaveBeenCalledOnce();
+      unmount(); qc.clear();
+    },
+  );
+
+  it("re-reads a status-filtered page when the event says the status changed", () => {
+    const { qc } = setup();
+    const byStatus = inboxPagesOptions("ws", statusFiltered).queryKey;
+    const byPriority = inboxPagesOptions("ws", priorityFiltered).queryKey;
+    for (const key of [byStatus, byPriority]) qc.setQueryData(key, twoPages());
+    const change = applyIssueChange(qc, "ws", "elsewhere", { ...titleEdit, status: "todo" }, {
+      changed: { ...noFieldMoved, status: true },
+    });
+    expect(change.staleKeys).toContainEqual(byStatus);
+    expect(change.staleKeys).not.toContainEqual(byPriority);
+    qc.clear();
+  });
+
+  it("re-reads a priority-filtered page when a loaded copy of the issue holds another priority", () => {
+    const { qc } = setup();
+    const byStatus = inboxPagesOptions("ws", statusFiltered).queryKey;
+    const byPriority = inboxPagesOptions("ws", priorityFiltered).queryKey;
+    for (const key of [byStatus, byPriority]) qc.setQueryData(key, twoPages());
+    // An inbox row of the issue.
+    const fromRow = applyIssueChange(qc, "ws", "target", { ...titleEdit, priority: "low" }, { changed: noFieldMoved });
+    expect(fromRow.staleKeys).toContainEqual(byPriority);
+    expect(fromRow.staleKeys).not.toContainEqual(byStatus);
+    expect(qc.getQueryData<InfiniteData<InboxPage>>(byPriority)?.pages[1]?.items[0]?.issue_priority).toBe("low");
+    // The issue itself, for an issue with no loaded inbox row.
+    qc.setQueryData(issueKeys.detail("ws", "elsewhere"), { id: "elsewhere", status: "done", priority: "high" } as Issue);
+    const fromIssue = applyIssueChange(qc, "ws", "elsewhere", { ...titleEdit, priority: "urgent" }, { changed: noFieldMoved });
+    expect(fromIssue.staleKeys).toContainEqual(byPriority);
+    expect(fromIssue.staleKeys).not.toContainEqual(byStatus);
     qc.clear();
   });
 

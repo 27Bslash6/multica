@@ -136,6 +136,12 @@ export function mapInboxCache(data: InboxCache, patch: (items: InboxItem[]) => I
   return items === data.items ? data : { ...data, items };
 }
 
+/** Every loaded row of any row cache. */
+export function inboxCacheItems(data: InboxCache): InboxItem[] {
+  if (Array.isArray(data)) return data;
+  return "pages" in data ? data.pages.flatMap((page) => page.items) : data.items;
+}
+
 /**
  * Patch every row cache under one view's prefix (`inboxKeys.list` or
  * `inboxKeys.archived`) and return the snapshot to roll back to.
