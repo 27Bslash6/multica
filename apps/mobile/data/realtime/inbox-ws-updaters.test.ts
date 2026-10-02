@@ -1,6 +1,6 @@
 // @vitest-environment node
-import { QueryClient } from "@tanstack/react-query";
-import type { InboxItem } from "@multica/core/types";
+import { QueryClient, type InfiniteData } from "@tanstack/react-query";
+import type { InboxItem, InboxPage } from "@multica/core/types";
 import { describe, expect, it, vi } from "vitest";
 
 import { inboxKeys } from "@/data/queries/inbox";
@@ -40,19 +40,47 @@ function item(id: string, issueId: string | null): InboxItem {
   };
 }
 
+// Two loaded pages plus a lookup for a group the pages also hold: the cache
+// layout after scrolling once and opening a notice.
+function seed(qc: QueryClient) {
+  qc.setQueryData<InfiniteData<InboxPage, string | null>>(inboxKeys.pages(wsId), {
+    pages: [
+      { items: [item("n1", "issue-a")], nextCursor: "cursor-1", hasMore: true },
+      { items: [item("n2", "issue-b"), item("n3", "issue-a")], nextCursor: null, hasMore: false },
+    ],
+    pageParams: [null, "cursor-1"],
+  });
+  qc.setQueryData<InboxPage>(inboxKeys.lookup(wsId, "issue-a"), {
+    items: [item("n1", "issue-a")],
+    nextCursor: null,
+    hasMore: false,
+  });
+}
+
+function pageIds(qc: QueryClient) {
+  return qc
+    .getQueryData<InfiniteData<InboxPage>>(inboxKeys.pages(wsId))
+    ?.pages.map((page) => page.items.map((i) => i.id));
+}
+
+function lookupItems(qc: QueryClient) {
+  return qc.getQueryData<InboxPage>(inboxKeys.lookup(wsId, "issue-a"))?.items;
+}
+
 describe("dropInboxItemsByIssue", () => {
-  it("drops every row pointing at the deleted issue", async () => {
+  it("drops every row pointing at the deleted issue, on every page and lookup", async () => {
     const qc = new QueryClient();
-    qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), [
-      item("n1", "issue-a"),
-      item("n2", "issue-b"),
-    ]);
+    seed(qc);
 
     await dropInboxItemsByIssue(qc, wsId, "issue-a");
 
+    expect(pageIds(qc)).toEqual([[], ["n2"]]);
+    expect(lookupItems(qc)).toEqual([]);
+    // Paging state is the server's; dropping rows must not touch it.
     expect(
-      qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId))?.map((i) => i.id),
-    ).toEqual(["n2"]);
+      qc.getQueryData<InfiniteData<InboxPage>>(inboxKeys.pages(wsId))?.pages[0]
+        ?.nextCursor,
+    ).toBe("cursor-1");
   });
 
   it("refreshes the unread summary the dropped rows can change", async () => {
@@ -61,7 +89,7 @@ describe("dropInboxItemsByIssue", () => {
     // so without this the badge stays lit over an emptied inbox (MUL-6967).
     const qc = new QueryClient();
     const invalidate = vi.spyOn(qc, "invalidateQueries");
-    qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), [item("n1", "issue-a")]);
+    seed(qc);
 
     await dropInboxItemsByIssue(qc, wsId, "issue-a");
 
@@ -112,14 +140,30 @@ describe("patchInboxIssueStatus", () => {
     // issue:updated frame.
     const qc = new QueryClient();
     const invalidate = vi.spyOn(qc, "invalidateQueries");
-    qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), [item("n1", "issue-a")]);
+    seed(qc);
 
     patchInboxIssueStatus(qc, wsId, "issue-a", "done");
 
-    expect(
-      qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId))?.[0]?.issue_status,
-    ).toBe("done");
+    const statuses = qc
+      .getQueryData<InfiniteData<InboxPage>>(inboxKeys.pages(wsId))
+      ?.pages.map((page) => page.items.map((i) => i.issue_status));
+    expect(statuses).toEqual([["done"], [null, "done"]]);
+    expect(lookupItems(qc)?.[0]?.issue_status).toBe("done");
     expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it("leaves another workspace's inbox alone", () => {
+    const qc = new QueryClient();
+    const otherKey = inboxKeys.lookup("workspace-2", "issue-a");
+    qc.setQueryData<InboxPage>(otherKey, {
+      items: [item("n9", "issue-a")],
+      nextCursor: null,
+      hasMore: false,
+    });
+
+    patchInboxIssueStatus(qc, wsId, "issue-a", "done");
+
+    expect(qc.getQueryData<InboxPage>(otherKey)?.items[0]?.issue_status).toBe(null);
   });
 });
 
@@ -153,5 +197,18 @@ describe("refreshInboxList", () => {
     expect(cancel).not.toHaveBeenCalledWith({
       queryKey: inboxKeys.unreadSummary(),
     });
+  });
+
+  it("reaches the paged list and every group lookup through the list prefix", async () => {
+    const qc = new QueryClient();
+    seed(qc);
+
+    await refreshInboxList(qc, wsId);
+
+    expect(qc.getQueryState(inboxKeys.pages(wsId))?.isInvalidated).toBe(true);
+    expect(
+      qc.getQueryState(inboxKeys.lookup(wsId, "issue-a"))?.isInvalidated,
+    ).toBe(true);
+    expect(qc.getQueryState(inboxKeys.unreadSummary())).toBeUndefined();
   });
 });
