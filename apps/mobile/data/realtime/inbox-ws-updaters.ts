@@ -39,9 +39,9 @@ export function patchInboxIssueStatus(
  * events add a request only in that window.
  */
 function rereadPagesBehindPatch(qc: QueryClient, wsId: string) {
-  const state = qc.getQueryState(inboxKeys.pages(wsId));
+  const state = qc.getQueryState(inboxKeys.listPages(wsId));
   if (state && state.fetchStatus !== "idle" && state.fetchMeta?.fetchMore) {
-    void refreshInboxQuery(qc, inboxKeys.pages(wsId));
+    void refreshInboxQuery(qc, inboxKeys.listPages(wsId));
   }
 }
 

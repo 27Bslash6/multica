@@ -72,7 +72,7 @@ function item(id: string, issueId: string | null): InboxItem {
 // a lookup, so a patch that misses any cache would leave a stale copy.
 function seed() {
   state.qc.setQueryData<InfiniteData<InboxPage, string | null>>(
-    inboxKeys.pages(wsId),
+    inboxKeys.listPages(wsId),
     {
       pages: [
         { items: [item("n1", "issue-a")], nextCursor: "cursor-1", hasMore: true },
@@ -81,7 +81,7 @@ function seed() {
       pageParams: [null, "cursor-1"],
     },
   );
-  state.qc.setQueryData<InboxPage>(inboxKeys.lookup(wsId, "issue-a"), {
+  state.qc.setQueryData<InboxPage>(inboxKeys.listLookup(wsId, "issue-a"), {
     items: [item("n1", "issue-a")],
     nextCursor: null,
     hasMore: false,
@@ -91,10 +91,10 @@ function seed() {
 function rows(pick: (i: InboxItem) => unknown) {
   return {
     pages: state.qc
-      .getQueryData<InfiniteData<InboxPage>>(inboxKeys.pages(wsId))
+      .getQueryData<InfiniteData<InboxPage>>(inboxKeys.listPages(wsId))
       ?.pages.map((page) => page.items.map(pick)),
     lookup: state.qc
-      .getQueryData<InboxPage>(inboxKeys.lookup(wsId, "issue-a"))
+      .getQueryData<InboxPage>(inboxKeys.listLookup(wsId, "issue-a"))
       ?.items.map(pick),
   };
 }

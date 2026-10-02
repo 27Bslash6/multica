@@ -47,14 +47,14 @@ function item(id: string, issueId: string | null): InboxItem {
 // Two loaded pages plus a lookup for a group the pages also hold: the cache
 // layout after scrolling once and opening a notice.
 function seed(qc: QueryClient) {
-  qc.setQueryData<InfiniteData<InboxPage, string | null>>(inboxKeys.pages(wsId), {
+  qc.setQueryData<InfiniteData<InboxPage, string | null>>(inboxKeys.listPages(wsId), {
     pages: [
       { items: [item("n1", "issue-a")], nextCursor: "cursor-1", hasMore: true },
       { items: [item("n2", "issue-b"), item("n3", "issue-a")], nextCursor: null, hasMore: false },
     ],
     pageParams: [null, "cursor-1"],
   });
-  qc.setQueryData<InboxPage>(inboxKeys.lookup(wsId, "issue-a"), {
+  qc.setQueryData<InboxPage>(inboxKeys.listLookup(wsId, "issue-a"), {
     items: [item("n1", "issue-a")],
     nextCursor: null,
     hasMore: false,
@@ -63,12 +63,12 @@ function seed(qc: QueryClient) {
 
 function pageIds(qc: QueryClient) {
   return qc
-    .getQueryData<InfiniteData<InboxPage>>(inboxKeys.pages(wsId))
+    .getQueryData<InfiniteData<InboxPage>>(inboxKeys.listPages(wsId))
     ?.pages.map((page) => page.items.map((i) => i.id));
 }
 
 function lookupItems(qc: QueryClient) {
-  return qc.getQueryData<InboxPage>(inboxKeys.lookup(wsId, "issue-a"))?.items;
+  return qc.getQueryData<InboxPage>(inboxKeys.listLookup(wsId, "issue-a"))?.items;
 }
 
 describe("dropInboxItemsByIssue", () => {
@@ -82,7 +82,7 @@ describe("dropInboxItemsByIssue", () => {
     expect(lookupItems(qc)).toEqual([]);
     // Paging state is the server's; dropping rows must not touch it.
     expect(
-      qc.getQueryData<InfiniteData<InboxPage>>(inboxKeys.pages(wsId))?.pages[0]
+      qc.getQueryData<InfiniteData<InboxPage>>(inboxKeys.listPages(wsId))?.pages[0]
         ?.nextCursor,
     ).toBe("cursor-1");
   });
@@ -132,9 +132,9 @@ describe("issue events during a next-page request", () => {
 
     await vi.waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(3));
     await vi.waitFor(() =>
-      expect(qc.getQueryState(inboxKeys.pages(wsId))?.fetchStatus).toBe("idle"));
+      expect(qc.getQueryState(inboxKeys.listPages(wsId))?.fetchStatus).toBe("idle"));
     const rows = qc
-      .getQueryData<InfiniteData<InboxPage>>(inboxKeys.pages(wsId))
+      .getQueryData<InfiniteData<InboxPage>>(inboxKeys.listPages(wsId))
       ?.pages.flatMap((page) => page.items);
     expect(rows?.some((row) => row.issue_id === "issue-a" && row.issue_status !== "done")).toBe(false);
     expect(fetchPage.mock.calls.map(([cursor]) => cursor)).toEqual([null, "cursor-1", null]);
@@ -152,7 +152,7 @@ describe("issue events during a next-page request", () => {
         queryFn: () => new Promise<InboxPage>(() => {}),
       })
       .catch(() => undefined);
-    expect(qc.getQueryState(inboxKeys.pages(wsId))?.fetchStatus).toBe("fetching");
+    expect(qc.getQueryState(inboxKeys.listPages(wsId))?.fetchStatus).toBe("fetching");
 
     patchInboxIssueStatus(qc, wsId, "issue-a", "done");
 
@@ -207,7 +207,7 @@ describe("patchInboxIssueStatus", () => {
     patchInboxIssueStatus(qc, wsId, "issue-a", "done");
 
     const statuses = qc
-      .getQueryData<InfiniteData<InboxPage>>(inboxKeys.pages(wsId))
+      .getQueryData<InfiniteData<InboxPage>>(inboxKeys.listPages(wsId))
       ?.pages.map((page) => page.items.map((i) => i.issue_status));
     expect(statuses).toEqual([["done"], [null, "done"]]);
     expect(lookupItems(qc)?.[0]?.issue_status).toBe("done");
@@ -216,7 +216,7 @@ describe("patchInboxIssueStatus", () => {
 
   it("leaves another workspace's inbox alone", () => {
     const qc = new QueryClient();
-    const otherKey = inboxKeys.lookup("workspace-2", "issue-a");
+    const otherKey = inboxKeys.listLookup("workspace-2", "issue-a");
     qc.setQueryData<InboxPage>(otherKey, {
       items: [item("n9", "issue-a")],
       nextCursor: null,
@@ -267,9 +267,9 @@ describe("refreshInboxList", () => {
 
     await refreshInboxList(qc, wsId);
 
-    expect(qc.getQueryState(inboxKeys.pages(wsId))?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(inboxKeys.listPages(wsId))?.isInvalidated).toBe(true);
     expect(
-      qc.getQueryState(inboxKeys.lookup(wsId, "issue-a"))?.isInvalidated,
+      qc.getQueryState(inboxKeys.listLookup(wsId, "issue-a"))?.isInvalidated,
     ).toBe(true);
     expect(qc.getQueryState(inboxKeys.unreadSummary())).toBeUndefined();
   });

@@ -11,8 +11,10 @@ import { api } from "@/data/api";
 /**
  * Inbox cache key factory.
  *
- * Shape mirrors web's `packages/core/inbox/queries.ts` — `["inbox", wsId, "list"]`
- * — so cross-platform mental model stays the same. Keying on wsId means
+ * Names and shapes mirror web's active-view keys in
+ * `packages/core/inbox/queries.ts` — `list`, `listPages`, `listLookup` — so
+ * the cross-platform mental model stays the same. Web's page and lookup keys
+ * end with the selected filters; the tab has none. Keying on wsId means
  * workspace switches naturally invalidate (TQ sees a new key and refetches).
  *
  * `list` is a prefix, not a cache of its own: the paged list and the per-group
@@ -22,8 +24,8 @@ export const inboxKeys = {
   all: (wsId: string | null) => ["inbox", wsId] as const,
   list: (wsId: string | null) =>
     [...inboxKeys.all(wsId), "list"] as const,
-  pages: (wsId: string | null) => [...inboxKeys.list(wsId), "pages"] as const,
-  lookup: (wsId: string | null, groupId: string) =>
+  listPages: (wsId: string | null) => [...inboxKeys.list(wsId), "pages"] as const,
+  listLookup: (wsId: string | null, groupId: string) =>
     [...inboxKeys.list(wsId), "lookup", groupId] as const,
   // Account-level, not workspace-scoped: one cache entry holding unread
   // counts for every workspace the user belongs to. Same key shape as web
@@ -34,7 +36,7 @@ export const inboxKeys = {
 /** The inbox tab's list: one row per issue group, newest first, 50 a page. */
 export const inboxPagesOptions = (wsId: string | null) =>
   infiniteQueryOptions({
-    queryKey: inboxKeys.pages(wsId),
+    queryKey: inboxKeys.listPages(wsId),
     initialPageParam: null as string | null,
     queryFn: ({ pageParam, signal }) =>
       api.listInboxPage({ cursor: pageParam, signal }),
@@ -50,7 +52,7 @@ export const inboxPagesOptions = (wsId: string | null) =>
  */
 export const inboxLookupOptions = (wsId: string | null, groupId: string) =>
   queryOptions({
-    queryKey: inboxKeys.lookup(wsId, groupId),
+    queryKey: inboxKeys.listLookup(wsId, groupId),
     queryFn: ({ signal }) => api.listInboxPage({ groupId, signal }),
     enabled: !!wsId && !!groupId,
   });
