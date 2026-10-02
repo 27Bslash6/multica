@@ -29,6 +29,20 @@ export function patchInboxIssueStatus(
       i.issue_id === issueId ? { ...i, issue_status: status } : i,
     ),
   );
+  rereadPagesBehindPatch(qc, wsId);
+}
+
+/**
+ * A next-page request appends to the pages it read before a patch, so its
+ * response would put the patched rows back. Re-read the list instead. An idle
+ * list keeps the patch, and a running refetch reads every page anew, so issue
+ * events add a request only in that window.
+ */
+function rereadPagesBehindPatch(qc: QueryClient, wsId: string) {
+  const state = qc.getQueryState(inboxKeys.pages(wsId));
+  if (state && state.fetchStatus !== "idle" && state.fetchMeta?.fetchMore) {
+    void refreshInboxQuery(qc, inboxKeys.pages(wsId));
+  }
 }
 
 /**
@@ -87,5 +101,6 @@ export async function dropInboxItemsByIssue(
   patchInboxCaches(qc, wsId, (items) =>
     items.filter((i) => i.issue_id !== issueId),
   );
+  rereadPagesBehindPatch(qc, wsId);
   await refreshInboxUnreadSummary(qc);
 }

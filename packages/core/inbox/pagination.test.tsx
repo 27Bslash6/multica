@@ -225,6 +225,60 @@ describe("active inbox pagination", () => {
     qc.clear();
   });
 
+  it("re-reads unfiltered pages when an issue change lands during a next-page request", async () => {
+    const { qc, wrapper } = setup();
+    const key = inboxPagesOptions("ws", EMPTY_INBOX_FILTERS).queryKey;
+    let releaseNext!: (value: InboxPage) => void;
+    const listInboxPage = vi.fn()
+      .mockResolvedValueOnce(page([active("target")], "next"))
+      .mockImplementationOnce(() => new Promise<InboxPage>((resolve) => { releaseNext = resolve; }))
+      .mockImplementation(async (_filters: unknown, options: { cursor?: string | null }) =>
+        options.cursor ? page([active("second")]) : page([{ ...active("target"), issue_status: "todo" }], "next"));
+    setApiInstance({ listInboxPage } as unknown as ApiClient);
+    const { result, unmount } = renderHook(() => useInfiniteQuery(inboxPagesOptions("ws", EMPTY_INBOX_FILTERS)), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    act(() => { void result.current.fetchNextPage({ cancelRefetch: false }); });
+    await waitFor(() => expect(listInboxPage).toHaveBeenCalledTimes(2));
+    act(() => {
+      const change = applyIssueChange(qc, "ws", "target", { status: "todo" }, { changed: issueChangedDims({ status: "todo" }) });
+      invalidateStaleListKeys(qc, change.staleKeys);
+    });
+    // The next page read before the patch lands after it and must not put the
+    // old status back: the request is cancelled and the loaded page re-read.
+    await act(async () => releaseNext(page([active("second")])));
+    await waitFor(() => expect(qc.getQueryState(key)?.fetchStatus).toBe("idle"));
+    expect(qc.getQueryData<InfiniteData<InboxPage>>(key)?.pages.map((p) => p.items[0]?.issue_status)).toEqual(["todo"]);
+    expect(listInboxPage).toHaveBeenCalledTimes(3);
+    unmount(); qc.clear();
+  });
+
+  it("leaves a running refetch of unfiltered pages alone on an issue change", async () => {
+    const { qc, wrapper } = setup();
+    let releaseRefetch!: (value: InboxPage) => void;
+    let refetchSignal: AbortSignal | undefined;
+    const listInboxPage = vi.fn()
+      .mockResolvedValueOnce(page([active("target")]))
+      .mockImplementationOnce((_filters: unknown, options: { signal?: AbortSignal }) => {
+        refetchSignal = options.signal;
+        return new Promise<InboxPage>((resolve) => { releaseRefetch = resolve; });
+      });
+    setApiInstance({ listInboxPage } as unknown as ApiClient);
+    const { result, unmount } = renderHook(() => useInfiniteQuery(inboxPagesOptions("ws", EMPTY_INBOX_FILTERS)), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    act(() => { void result.current.refetch(); });
+    await waitFor(() => expect(listInboxPage).toHaveBeenCalledTimes(2));
+    act(() => {
+      const change = applyIssueChange(qc, "ws", "target", { status: "todo" }, { changed: issueChangedDims({ status: "todo" }) });
+      expect(change.staleKeys).not.toContainEqual(inboxPagesOptions("ws", EMPTY_INBOX_FILTERS).queryKey);
+      invalidateStaleListKeys(qc, change.staleKeys);
+    });
+    expect(refetchSignal?.aborted).toBe(false);
+    await act(async () => releaseRefetch(page([{ ...active("target"), issue_status: "todo" }])));
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    expect(listInboxPage).toHaveBeenCalledTimes(2);
+    unmount(); qc.clear();
+  });
+
   it("keeps pages untouched by an issue event identical and still owed a refetch", async () => {
     const { qc } = setup();
     const key = inboxPagesOptions("ws", EMPTY_INBOX_FILTERS).queryKey;

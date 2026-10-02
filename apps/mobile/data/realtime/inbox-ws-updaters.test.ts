@@ -1,9 +1,13 @@
 // @vitest-environment node
-import { QueryClient, type InfiniteData } from "@tanstack/react-query";
+import {
+  InfiniteQueryObserver,
+  QueryClient,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import type { InboxItem, InboxPage } from "@multica/core/types";
 import { describe, expect, it, vi } from "vitest";
 
-import { inboxKeys } from "@/data/queries/inbox";
+import { inboxKeys, inboxPagesOptions } from "@/data/queries/inbox";
 import {
   dropInboxItemsByIssue,
   patchInboxIssueStatus,
@@ -96,6 +100,64 @@ describe("dropInboxItemsByIssue", () => {
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: inboxKeys.unreadSummary(),
     });
+  });
+});
+
+describe("issue events during a next-page request", () => {
+  // A next page appends to the pages it read when it started, so a patch that
+  // lands meanwhile would be undone when the page arrives. The pages are
+  // re-read instead.
+  it.each([
+    ["a status change", (qc: QueryClient) => patchInboxIssueStatus(qc, wsId, "issue-a", "done")],
+    ["a deletion", (qc: QueryClient) => void dropInboxItemsByIssue(qc, wsId, "issue-a")],
+  ])("keeps %s that lands before the page", async (_name, applyEvent) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let releaseNext!: (page: InboxPage) => void;
+    const fetchPage = vi
+      .fn<(cursor: string | null) => Promise<InboxPage>>()
+      .mockResolvedValueOnce({ items: [item("n1", "issue-a")], nextCursor: "cursor-1", hasMore: true })
+      .mockImplementationOnce(() => new Promise((resolve) => { releaseNext = resolve; }))
+      .mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    const observer = new InfiniteQueryObserver(qc, {
+      ...inboxPagesOptions(wsId),
+      queryFn: ({ pageParam }) => fetchPage(pageParam),
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    await vi.waitFor(() => expect(observer.getCurrentResult().isSuccess).toBe(true));
+    void observer.fetchNextPage();
+    await vi.waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(2));
+
+    applyEvent(qc);
+    releaseNext({ items: [item("n2", "issue-b")], nextCursor: null, hasMore: false });
+
+    await vi.waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() =>
+      expect(qc.getQueryState(inboxKeys.pages(wsId))?.fetchStatus).toBe("idle"));
+    const rows = qc
+      .getQueryData<InfiniteData<InboxPage>>(inboxKeys.pages(wsId))
+      ?.pages.flatMap((page) => page.items);
+    expect(rows?.some((row) => row.issue_id === "issue-a" && row.issue_status !== "done")).toBe(false);
+    expect(fetchPage.mock.calls.map(([cursor]) => cursor)).toEqual([null, "cursor-1", null]);
+    unsubscribe();
+  });
+
+  it("leaves a running refetch alone", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    seed(qc);
+    const cancel = vi.spyOn(qc, "cancelQueries");
+    // Never settles; clearing the client below cancels it.
+    void qc
+      .fetchInfiniteQuery({
+        ...inboxPagesOptions(wsId),
+        queryFn: () => new Promise<InboxPage>(() => {}),
+      })
+      .catch(() => undefined);
+    expect(qc.getQueryState(inboxKeys.pages(wsId))?.fetchStatus).toBe("fetching");
+
+    patchInboxIssueStatus(qc, wsId, "issue-a", "done");
+
+    expect(cancel).not.toHaveBeenCalled();
+    qc.clear();
   });
 });
 
