@@ -2640,7 +2640,11 @@ export const InboxItemListSchema = z.array(
     .loose(),
 );
 
-export const ArchivedInboxPageSchema = z.object({
+// One page of the paged inbox endpoints, active (`/api/inbox/page`) and
+// archived (`/api/inbox/archived/page`) alike. Unlike the arrays above, a
+// malformed page has no fallback: the caller throws, so the view shows a retry
+// instead of reading as an empty inbox.
+export const InboxPageSchema = z.object({
   items: InboxItemListSchema,
   next_cursor: z.string().min(1).nullable(),
   has_more: z.boolean(),
@@ -2648,7 +2652,7 @@ export const ArchivedInboxPageSchema = z.object({
   (!page.has_more || page.items.length > 0))
   .transform((page) => ({ items: page.items, nextCursor: page.next_cursor, hasMore: page.has_more }));
 
-export const ArchivedInboxFacetsSchema = z.object({
+export const InboxFacetsSchema = z.object({
   statuses: z.record(z.string(), z.number().int().nonnegative()),
   priorities: z.record(z.string(), z.number().int().nonnegative()),
   actors: z.record(z.string(), z.number().int().nonnegative()),

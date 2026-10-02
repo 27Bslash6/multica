@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from "vitest";
-import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import { QueryClient, QueryObserver, type InfiniteData } from "@tanstack/react-query";
 import {
   cancelInboxLists,
   onInboxInvalidate,
@@ -10,8 +10,9 @@ import {
   onInboxSummaryInvalidate,
   patchInboxIssueProjection,
 } from "./ws-updaters";
-import { inboxKeys } from "./queries";
-import type { InboxItem } from "../types";
+import { EMPTY_INBOX_FILTERS } from "./filter-store";
+import { inboxKeys, inboxPagesOptions } from "./queries";
+import type { InboxItem, InboxPage } from "../types";
 
 const wsId = "ws-1";
 
@@ -283,6 +284,31 @@ describe.each([
         archived: view === "archived",
       }),
     ]);
+    try {
+      await onInboxInvalidate(qc, wsId);
+      await update(qc);
+      expect(qc.getQueryState(queryKey)?.isInvalidated).toBe(true);
+    } finally {
+      qc.clear();
+    }
+  });
+});
+
+// The paged main inbox holds the same rows inside pages; the same writers
+// must keep its pending refresh too.
+describe("partial updates to an invalidated paged main inbox", () => {
+  const queryKey = inboxPagesOptions(wsId, EMPTY_INBOX_FILTERS).queryKey;
+  it.each([
+    ["status", (qc: QueryClient) => onInboxIssueStatusChanged(qc, wsId, "issue-a", "done")],
+    ["priority", (qc: QueryClient) => patchInboxIssueProjection(qc, wsId, "issue-a", { priority: "high" })],
+    ["unrelated issue", (qc: QueryClient) => onInboxIssueStatusChanged(qc, wsId, "other-issue", "done")],
+    ["deletion", (qc: QueryClient) => onInboxIssueDeleted(qc, wsId, "issue-a")],
+  ] as const)("preserves the pending refresh after %s", async (_label, update) => {
+    const qc = new QueryClient();
+    qc.setQueryData<InfiniteData<InboxPage>>(queryKey, {
+      pages: [{ items: [makeItem("i1", "issue-a", { issue_priority: "low" })], nextCursor: null, hasMore: false }],
+      pageParams: [null],
+    });
     try {
       await onInboxInvalidate(qc, wsId);
       await update(qc);

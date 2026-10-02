@@ -3,7 +3,7 @@ import type { IssueWakeup, IssueWakeupInput, IssueWakeupSummaryRow, PausedWakeup
 import type { WorkspaceWakeupPage, WorkspaceWakeupFilters } from "../types/issue-wakeup";
 import { WorkspaceWakeupPageSchema, IssueWakeupSchema, IssueWakeupSummaryRowSchema, PausedWakeupSchema, SystemWakeupSchema, WakeupRunSchema, WorkspaceSystemWakeupSchema } from "./schemas";
 import type { InboxFilters } from "../inbox/filter-store";
-import type { ArchivedInboxPage, ArchivedInboxFacets } from "../types/inbox";
+import type { InboxPage, InboxFacets } from "../types/inbox";
 import { configStore } from "../config";
 import type {
   Issue,
@@ -398,8 +398,8 @@ import {
   InboxUnreadSummarySchema,
   EMPTY_INBOX_UNREAD_SUMMARY,
   InboxItemListSchema,
-  ArchivedInboxPageSchema,
-  ArchivedInboxFacetsSchema,
+  InboxPageSchema,
+  InboxFacetsSchema,
   EMPTY_INBOX_ITEMS,
   NotificationPreferenceResponseSchema,
   EMPTY_NOTIFICATION_PREFERENCE_RESPONSE,
@@ -525,6 +525,13 @@ export interface ClientUsageRequest {
 export interface LoginResponse {
   token: string;
   user: User;
+}
+
+/** Where a paged inbox request starts: after `cursor`, or one group by id. */
+interface InboxPageRequest {
+  cursor?: string | null;
+  groupId?: string;
+  signal?: AbortSignal;
 }
 
 function parseSearchIndexResponse<T>(raw: unknown, schema: ZodType, endpoint: string): T {
@@ -2847,6 +2854,10 @@ export class ApiClient {
   }
 
   // Inbox
+  /**
+   * @deprecated Unbounded legacy array of every active notification row.
+   * Use listInboxPage. Retained for compatibility.
+   */
   async listInbox(): Promise<InboxItem[]> {
     const raw = await this.fetch<unknown>("/api/inbox");
     return parseWithFallback(raw, InboxItemListSchema, EMPTY_INBOX_ITEMS, {
@@ -2876,7 +2887,7 @@ export class ApiClient {
     });
   }
 
-  private archivedInboxParams(filters: InboxFilters): URLSearchParams {
+  private inboxFilterParams(filters: InboxFilters): URLSearchParams {
     const params = new URLSearchParams();
     if (filters.statuses.length) params.set("statuses", [...filters.statuses].sort().join(","));
     if (filters.priorities.length) params.set("priorities", [...filters.priorities].sort().join(","));
@@ -2885,28 +2896,41 @@ export class ApiClient {
     return params;
   }
 
-  async listArchivedInboxPage(filters: InboxFilters, options: {
-    cursor?: string | null; groupId?: string; signal?: AbortSignal;
-  } = {}): Promise<ArchivedInboxPage> {
-    const params = this.archivedInboxParams(filters);
+  // The active and archived views page through issue groups with one
+  // contract; `label` only names the view in the error a malformed response
+  // raises.
+  private async fetchInboxPage(path: string, label: string, filters: InboxFilters, options: InboxPageRequest): Promise<InboxPage> {
+    const params = this.inboxFilterParams(filters);
     params.set("limit", "50");
     if (options.cursor) params.set("cursor", options.cursor);
     if (options.groupId) params.set("group_id", options.groupId);
-    const raw = await this.fetch<unknown>(`/api/inbox/archived/page?${params}`, { signal: options.signal });
-    const page = parseWithFallback<ArchivedInboxPage | null>(raw, ArchivedInboxPageSchema, null, {
-      endpoint: "GET /api/inbox/archived/page",
-    });
-    if (!page) throw new Error("Invalid archived inbox page response");
+    const raw = await this.fetch<unknown>(`${path}?${params}`, { signal: options.signal });
+    const page = parseWithFallback<InboxPage | null>(raw, InboxPageSchema, null, { endpoint: `GET ${path}` });
+    if (!page) throw new Error(`Invalid ${label} page response`);
     return page;
   }
 
-  async getArchivedInboxFacets(filters: InboxFilters, signal?: AbortSignal): Promise<ArchivedInboxFacets> {
-    const raw = await this.fetch<unknown>(`/api/inbox/archived/facets?${this.archivedInboxParams(filters)}`, { signal });
-    const facets = parseWithFallback<ArchivedInboxFacets | null>(raw, ArchivedInboxFacetsSchema, null, {
-      endpoint: "GET /api/inbox/archived/facets",
-    });
-    if (!facets) throw new Error("Invalid archived inbox facets response");
+  private async fetchInboxFacets(path: string, label: string, filters: InboxFilters, signal?: AbortSignal): Promise<InboxFacets> {
+    const raw = await this.fetch<unknown>(`${path}?${this.inboxFilterParams(filters)}`, { signal });
+    const facets = parseWithFallback<InboxFacets | null>(raw, InboxFacetsSchema, null, { endpoint: `GET ${path}` });
+    if (!facets) throw new Error(`Invalid ${label} facets response`);
     return facets;
+  }
+
+  async listInboxPage(filters: InboxFilters, options: InboxPageRequest = {}): Promise<InboxPage> {
+    return this.fetchInboxPage("/api/inbox/page", "inbox", filters, options);
+  }
+
+  async getInboxFacets(filters: InboxFilters, signal?: AbortSignal): Promise<InboxFacets> {
+    return this.fetchInboxFacets("/api/inbox/facets", "inbox", filters, signal);
+  }
+
+  async listArchivedInboxPage(filters: InboxFilters, options: InboxPageRequest = {}): Promise<InboxPage> {
+    return this.fetchInboxPage("/api/inbox/archived/page", "archived inbox", filters, options);
+  }
+
+  async getArchivedInboxFacets(filters: InboxFilters, signal?: AbortSignal): Promise<InboxFacets> {
+    return this.fetchInboxFacets("/api/inbox/archived/facets", "archived inbox", filters, signal);
   }
 
   async unarchiveInbox(id: string): Promise<InboxItem> {
