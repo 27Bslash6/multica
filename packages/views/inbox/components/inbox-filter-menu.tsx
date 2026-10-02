@@ -1,13 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { CircleDot, Filter, Mail, RotateCcw, SignalHigh, UserRound } from "lucide-react";
 import { PRIORITY_DISPLAY_ORDER } from "@multica/core/issues/config";
 import {
   inboxActorKeyParts,
-  inboxFiltersForPrioritySupport,
   inboxFilterCount,
-  type InboxPriorityFilterSupport,
   useInboxFilters,
   useInboxFilterStore,
 } from "@multica/core/inbox/filter-store";
@@ -41,12 +39,10 @@ import { useT } from "../../i18n";
 export function InboxFilterMenu({
   wsId,
   items,
-  priorityFilterSupport,
   archived = false,
 }: {
   wsId: string;
   items: InboxItem[];
-  priorityFilterSupport: InboxPriorityFilterSupport;
   archived?: boolean;
 }) {
   const { t } = useT("inbox");
@@ -68,9 +64,6 @@ export function InboxFilterMenu({
   );
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
   const clearFilters = useInboxFilterStore((state) => state.clearFilters);
-  const clearPriorityFilters = useInboxFilterStore(
-    (state) => state.clearPriorityFilters,
-  );
   const inboxStatusKeys = useMemo(
     () => [
       ...new Set([
@@ -84,30 +77,7 @@ export function InboxFilterMenu({
     [items, facets, filters.statuses],
   );
   const statusOptions = useStatusOptions(wsId, inboxStatusKeys);
-  const effectiveFilters = useMemo(
-    () => inboxFiltersForPrioritySupport(filters, priorityFilterSupport),
-    [filters, priorityFilterSupport],
-  );
-  const activeCount = inboxFilterCount(effectiveFilters);
-  const priorityFilteringSupported = priorityFilterSupport === "supported";
-
-  // A workspace can retain filters while its backend changes (Desktop server
-  // switch, self-hosted downgrade, or rolling deployment). Remove a priority
-  // selection only once incompatibility is confirmed; "unknown" simply keeps
-  // it dormant while an empty list gives us no capability evidence.
-  useEffect(() => {
-    if (
-      priorityFilterSupport === "unsupported" &&
-      filters.priorities.length > 0
-    ) {
-      clearPriorityFilters(wsId);
-    }
-  }, [
-    clearPriorityFilters,
-    filters.priorities.length,
-    priorityFilterSupport,
-    wsId,
-  ]);
+  const activeCount = inboxFilterCount(filters);
 
   // Counts are faceted: every count respects the other active dimensions while
   // ignoring its own, so each number says how many rows selecting that value
@@ -164,7 +134,7 @@ export function InboxFilterMenu({
           <Button variant="ghost" size="sm" onClick={() => { void facetsQuery.refetch(); }}>{t(($) => $.list.retry)}</Button>
         </div>}
         <DropdownMenuCheckboxItem
-          checked={effectiveFilters.unreadOnly}
+          checked={filters.unreadOnly}
           onCheckedChange={() => toggleUnreadOnly(wsId)}
         >
           <Mail className="size-3.5" />
@@ -182,15 +152,15 @@ export function InboxFilterMenu({
             <DropdownMenuSubTrigger>
               <UserRound className="size-3.5" />
               <span className="flex-1">{t(($) => $.filters.from)}</span>
-              {effectiveFilters.actors.length > 0 && (
+              {filters.actors.length > 0 && (
                 <span className="text-caption font-medium text-primary">
-                  {effectiveFilters.actors.length}
+                  {filters.actors.length}
                 </span>
               )}
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="w-auto min-w-48">
               {actorOptions.map((option) => {
-                const checked = effectiveFilters.actors.includes(option.key);
+                const checked = filters.actors.includes(option.key);
                 const count = actors.get(option.key) ?? 0;
                 return (
                   <DropdownMenuCheckboxItem
@@ -224,15 +194,15 @@ export function InboxFilterMenu({
           <DropdownMenuSubTrigger>
             <CircleDot className="size-3.5" />
             <span className="flex-1">{t(($) => $.filters.status)}</span>
-            {effectiveFilters.statuses.length > 0 && (
+            {filters.statuses.length > 0 && (
               <span className="text-caption font-medium text-primary">
-                {effectiveFilters.statuses.length}
+                {filters.statuses.length}
               </span>
             )}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-auto min-w-48">
             {statusOptions.map((option) => {
-              const checked = effectiveFilters.statuses.includes(option.key);
+              const checked = filters.statuses.includes(option.key);
               const count = statuses.get(option.key) ?? 0;
               return (
                 <DropdownMenuCheckboxItem
@@ -259,42 +229,40 @@ export function InboxFilterMenu({
           </DropdownMenuSubContent>
         </DropdownMenuSub>
 
-        {priorityFilteringSupported ? (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              <SignalHigh className="size-3.5" />
-              <span className="flex-1">{t(($) => $.filters.priority)}</span>
-              {effectiveFilters.priorities.length > 0 ? (
-                <span className="text-caption font-medium text-primary">
-                  {effectiveFilters.priorities.length}
-                </span>
-              ) : null}
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-auto min-w-44">
-              {PRIORITY_DISPLAY_ORDER.map((priority) => {
-                const checked = effectiveFilters.priorities.includes(priority);
-                const count = priorities.get(priority) ?? 0;
-                return (
-                  <DropdownMenuCheckboxItem
-                    key={priority}
-                    checked={checked}
-                    onCheckedChange={() => togglePriority(wsId, priority)}
-                  >
-                    <PriorityIcon priority={priority} />
-                    <span className="flex-1">
-                      {tIssues(($) => $.priority[priority])}
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <SignalHigh className="size-3.5" />
+            <span className="flex-1">{t(($) => $.filters.priority)}</span>
+            {filters.priorities.length > 0 ? (
+              <span className="text-caption font-medium text-primary">
+                {filters.priorities.length}
+              </span>
+            ) : null}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-auto min-w-44">
+            {PRIORITY_DISPLAY_ORDER.map((priority) => {
+              const checked = filters.priorities.includes(priority);
+              const count = priorities.get(priority) ?? 0;
+              return (
+                <DropdownMenuCheckboxItem
+                  key={priority}
+                  checked={checked}
+                  onCheckedChange={() => togglePriority(wsId, priority)}
+                >
+                  <PriorityIcon priority={priority} />
+                  <span className="flex-1">
+                    {tIssues(($) => $.priority[priority])}
+                  </span>
+                  {count > 0 ? (
+                    <span className="text-caption text-muted-foreground">
+                      {t(($) => $.filters.notification_count, { count })}
                     </span>
-                    {count > 0 ? (
-                      <span className="text-caption text-muted-foreground">
-                        {t(($) => $.filters.notification_count, { count })}
-                      </span>
-                    ) : null}
-                  </DropdownMenuCheckboxItem>
-                );
-              })}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-        ) : null}
+                  ) : null}
+                </DropdownMenuCheckboxItem>
+              );
+            })}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
 
         {activeCount > 0 && (
           <>

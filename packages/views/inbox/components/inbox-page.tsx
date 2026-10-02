@@ -159,8 +159,6 @@ export function InboxPage() {
   const loadNextPage = useCallback(() => { void fetchNextViewPage({ cancelRefetch: false }); }, [fetchNextViewPage]);
   const viewError = viewQuery.isError && !viewQuery.data;
   const viewItems = isArchivedView ? archivedItems : items;
-  // The paginated endpoints guarantee the projection, including on empty pages.
-  const priorityFilterSupport = "supported";
   // Re-applied locally so an optimistic patch (a row read under "unread
   // only", an issue moved out of a status) leaves the list at once.
   const visibleItems = useMemo(() => filterInboxItems(viewItems, filters), [viewItems, filters]);
@@ -527,7 +525,6 @@ export function InboxPage() {
       <InboxFilterMenu
         wsId={wsId}
         items={viewItems}
-        priorityFilterSupport={priorityFilterSupport}
         archived={isArchivedView}
       />
       {/* Batch actions are main-view only. Every entry archives from the MAIN

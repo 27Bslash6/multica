@@ -14,10 +14,7 @@ import {
   BUILT_IN_STATUS_CATEGORY,
   BUILT_IN_STATUS_ORDER,
 } from "@multica/core/issues/config";
-import {
-  type InboxPriorityFilterSupport,
-  useInboxFilterStore,
-} from "@multica/core/inbox/filter-store";
+import { useInboxFilterStore } from "@multica/core/inbox/filter-store";
 import type { InboxItem, IssueStatusEntry } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 import { InboxFilterMenu } from "./inbox-filter-menu";
@@ -92,14 +89,12 @@ const ITEM_FACETS = {
 
 function renderMenu({
   items = ITEMS,
-  priorityFilterSupport = "supported",
   archived = false,
   getInboxFacets = vi.fn(async () => ITEM_FACETS),
   getArchivedInboxFacets = vi.fn(async () => ({ statuses: {}, priorities: {}, actors: {}, unreadCount: 0 })),
   statusEntries = BUILT_IN_STATUS_ORDER.map(statusEntry),
 }: {
   items?: InboxItem[];
-  priorityFilterSupport?: InboxPriorityFilterSupport;
   archived?: boolean;
   getInboxFacets?: ReturnType<typeof vi.fn>;
   getArchivedInboxFacets?: ReturnType<typeof vi.fn>;
@@ -122,7 +117,6 @@ function renderMenu({
       <InboxFilterMenu
         wsId="ws-1"
         items={items}
-        priorityFilterSupport={priorityFilterSupport}
         archived={archived}
       />
     </QueryClientProvider>,
@@ -292,24 +286,6 @@ describe("InboxFilterMenu", () => {
       expect(
         screen.getByRole("button", { name: "1 active filter" }),
       ).toHaveTextContent("1"),
-    );
-  });
-
-  it("hides priority and clears its filter for a legacy response", async () => {
-    useInboxFilterStore.getState().togglePriorityFilter("ws-1", "high");
-    renderMenu({
-      items: [item("legacy", "todo", undefined)],
-      priorityFilterSupport: "unsupported",
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Filter inbox" }));
-    expect(
-      screen.queryByRole("menuitem", { name: /^Priority/ }),
-    ).toBeNull();
-    await waitFor(() =>
-      expect(
-        useInboxFilterStore.getState().filtersByWorkspace["ws-1"],
-      ).toBeUndefined(),
     );
   });
 });
