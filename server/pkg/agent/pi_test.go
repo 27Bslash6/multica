@@ -855,6 +855,50 @@ func TestPiExecuteFailsOnAgentEndErrorAfterToolWork(t *testing.T) {
 	}
 }
 
+func TestPiExecuteFailsOnScannerOverflow(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	// agent_end repeats every message of the run, so on a long run it is the
+	// line most likely to outgrow the shared bound. Once the scanner stops, the
+	// run's terminal state is unknown and must not read as success. The line is
+	// sized from agentStreamMaxLineBytes so raising the cap keeps this test on
+	// the overflow branch.
+	script := piEventStreamScript([]string{
+		`{"type":"agent_start"}`,
+		`{"type":"turn_start"}`,
+		`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"done"}}`,
+		`{"type":"turn_end","message":{"role":"assistant","model":"test","usage":{"input":1,"output":1}}}`,
+	}) + fmt.Sprintf("dd if=/dev/zero bs=1048576 count=%d 2>/dev/null | tr '\\000' x\nprintf '\\n'\n",
+		agentStreamMaxLineBytes/(1024*1024)+1)
+	backend := newPiTestBackend(t, script, 0)
+	// A generous timeout: without the fix this run hangs until it expires, and
+	// a loaded host must not turn the fixed run into a timeout either.
+	session, err := backend.Execute(context.Background(), "prompt-ignored", ExecOptions{
+		Timeout:         30 * time.Second,
+		ResumeSessionID: filepath.Join(t.TempDir(), "session.jsonl"),
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+
+	result := waitPiResult(t, session, 40*time.Second)
+	if result.Status != "failed" {
+		t.Fatalf("result = {Status:%q Error:%q}, want failed", result.Status, result.Error)
+	}
+	for _, want := range []string{"pi stdout read error", "token too long"} {
+		if !strings.Contains(result.Error, want) {
+			t.Errorf("Error = %q, want substring %q", result.Error, want)
+		}
+	}
+}
+
 func TestStripPiToolCallMarkup(t *testing.T) {
 	tests := map[string]string{
 		`before call:bash{command:<|"|>cd repo/path && ls -F<|"|>}<tool_call|> after`:                           "before  after",

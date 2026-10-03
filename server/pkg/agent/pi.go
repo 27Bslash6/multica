@@ -651,6 +651,13 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 				}
 			}
 		}
+		scanErr := scanner.Err()
+		if scanErr != nil {
+			// Scanner stopped consuming stdout. Close the pipe before Wait so Pi,
+			// still writing an oversized event, cannot deadlock on the full OS
+			// pipe; the scanner error remains the primary failure.
+			closePiReadPipe(stdout)
+		}
 		if d := flushPiTextBuffer(&textBuffer); d != "" {
 			output.WriteString(d)
 			trySend(msgCh, Message{Type: MessageText, Content: d})
@@ -699,6 +706,17 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 			finalStatus = "failed"
 			finalError = lastTurnError
 			authoritativeTerminal = true
+		} else if scanErr != nil && finalStatus == "completed" {
+			// The unread rest of the stream may hold the run's terminal state
+			// (agent_end repeats every message of the run, so it is the line
+			// most likely to overflow), so the run cannot count as a success.
+			// Ranked above waitErr: closing stdout is what made Pi exit.
+			authoritativeTerminal = true
+			finalStatus = "failed"
+			finalError = fmt.Sprintf("%s stdout read error: %v", label, scanErr)
+			if lastTurnError != "" {
+				finalError = lastTurnError + "; " + finalError
+			}
 		} else if waitErr != nil && finalStatus == "completed" {
 			authoritativeTerminal = true
 			finalStatus = "failed"
