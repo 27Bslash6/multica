@@ -613,6 +613,23 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 					turnErrors.clear()
 				}
 
+			case "agent_end":
+				// agent_end closes the run, and its last assistant message holds
+				// the run's terminal state. Pi 0.74.0 and earlier report a
+				// failure raised outside a model stream, such as an API key they
+				// cannot resolve, only here: no turn_end, no error event, and
+				// print mode still exits 0. Record it like a turn_end error, so
+				// an automatic retry or a later successful turn still clears it.
+				msg := lastPiAssistantMessage(evt.Messages)
+				if msg == nil || msg.StopReason != "error" {
+					continue
+				}
+				runError := msg.ErrorMessage
+				if runError == "" {
+					runError = label + " ended the run with an error"
+				}
+				turnErrors.record(runError)
+
 			case "error":
 				errText := decodePiString(evt.Message)
 				trySend(msgCh, Message{Type: MessageError, Content: errText})
@@ -843,6 +860,9 @@ type piStreamEvent struct {
 	// error: Message is a string. turn_end: Message is an object.
 	Message json.RawMessage `json:"message,omitempty"`
 
+	// agent_end: the messages the agent run produced, oldest first.
+	Messages json.RawMessage `json:"messages,omitempty"`
+
 	// auto_retry_end
 	Success    bool   `json:"success,omitempty"`
 	FinalError string `json:"finalError,omitempty"`
@@ -858,9 +878,10 @@ type piMessage struct {
 	Model string   `json:"model,omitempty"`
 	Usage *piUsage `json:"usage,omitempty"`
 
-	// turn_end carries the terminal state of the turn. Pi sets StopReason to
-	// "error" for a provider call it could not complete, whether or not it
-	// goes on to retry, and puts the provider's message in ErrorMessage.
+	// turn_end carries the terminal state of the turn, and agent_end's last
+	// assistant message that of the run. Pi sets StopReason to "error" for a
+	// provider call it could not complete, whether or not it goes on to retry,
+	// and puts the provider's message in ErrorMessage.
 	StopReason   string `json:"stopReason,omitempty"`
 	ErrorMessage string `json:"errorMessage,omitempty"`
 }
@@ -882,6 +903,22 @@ func decodePiMessage(raw json.RawMessage) *piMessage {
 		return nil
 	}
 	return &m
+}
+
+// lastPiAssistantMessage returns the newest assistant message in agent_end's
+// messages, or nil when there is none. Messages are decoded one at a time so
+// an unexpected shape elsewhere in the run cannot hide the last one.
+func lastPiAssistantMessage(raw json.RawMessage) *piMessage {
+	var messages []json.RawMessage
+	if err := json.Unmarshal(raw, &messages); err != nil {
+		return nil
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if m := decodePiMessage(messages[i]); m != nil && m.Role == "assistant" {
+			return m
+		}
+	}
+	return nil
 }
 
 func decodePiString(raw json.RawMessage) string {
