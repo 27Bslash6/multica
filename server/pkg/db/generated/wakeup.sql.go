@@ -1758,8 +1758,8 @@ type SetWakeupConditionStateParams struct {
 	ID             pgtype.UUID        `json:"id"`
 }
 
-// A committed check clears an earlier check's error. An unmet condition never
-// reaches AdvanceIssueWakeup, so nothing else would.
+// Writing condition state means evaluation succeeded, so clear any earlier
+// failure; an unmet condition never reaches AdvanceIssueWakeup.
 func (q *Queries) SetWakeupConditionState(ctx context.Context, arg SetWakeupConditionStateParams) error {
 	_, err := q.db.Exec(ctx, setWakeupConditionState, arg.ConditionState, arg.NextFireAt, arg.ID)
 	return err

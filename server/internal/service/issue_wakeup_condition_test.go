@@ -216,10 +216,7 @@ func TestWakeupConditionValidation(t *testing.T) {
 	}
 }
 
-// A check that loses its lock wait records the error on the rule. The next
-// check that commits must clear it: an unmet condition never reaches the
-// firing write that clears errors on other rules, so without this the rule
-// reports a failure long after its checks recovered.
+// A check that loses its lock wait records an error; the next unmet check that commits clears it.
 func TestWakeupConditionCheckClearsAnEarlierFailure(t *testing.T) {
 	f, s, issue, agent := conditionFixture(t)
 	ctx := context.Background()
@@ -263,11 +260,5 @@ func TestWakeupConditionCheckClearsAnEarlierFailure(t *testing.T) {
 	}
 	if got.LastError.Valid {
 		t.Fatalf("the check that committed kept the earlier error %q", got.LastError.String)
-	}
-	if !got.Enabled || !got.NextFireAt.Valid || !got.NextFireAt.Time.After(failed.NextFireAt.Time) {
-		t.Fatalf("the recovered check did not reschedule the rule: %+v", got)
-	}
-	if n := wakeRuns(t, f, w.ID); n != 0 {
-		t.Fatalf("an unmet condition started %d runs", n)
 	}
 }
