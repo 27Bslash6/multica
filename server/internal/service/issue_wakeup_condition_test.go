@@ -215,3 +215,59 @@ func TestWakeupConditionValidation(t *testing.T) {
 		}
 	}
 }
+
+// A check that loses its lock wait records the error on the rule. The next
+// check that commits must clear it: an unmet condition never reaches the
+// firing write that clears errors on other rules, so without this the rule
+// reports a failure long after its checks recovered.
+func TestWakeupConditionCheckClearsAnEarlierFailure(t *testing.T) {
+	f, s, issue, agent := conditionFixture(t)
+	ctx := context.Background()
+	workspace := parseTestUUID(t, f.WorkspaceID)
+	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Instruction: "Review when ready",
+		Condition: condition(t, map[string]any{"type": "issue_field", "field": "status", "value": "in_review"})})
+	due := func() {
+		f.Exec(t, "UPDATE issue_wakeup SET next_fire_at=now()-interval '1 second' WHERE id=$1", w.ID)
+	}
+
+	due()
+	tx, err := f.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, "SELECT 1 FROM issue WHERE id=$1 FOR UPDATE", issue); err != nil {
+		t.Fatal(err)
+	}
+	tickErr := s.TickWorkspaces(ctx, workspace)
+	if err = tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if tickErr == nil {
+		t.Fatal("a check blocked on its issue row reported no error")
+	}
+	failed, err := f.q.LocklessWakeup(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !failed.LastError.Valid {
+		t.Fatal("the failed check recorded no error")
+	}
+
+	due()
+	if err = s.TickWorkspaces(ctx, workspace); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.q.LocklessWakeup(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastError.Valid {
+		t.Fatalf("the check that committed kept the earlier error %q", got.LastError.String)
+	}
+	if !got.Enabled || !got.NextFireAt.Valid || !got.NextFireAt.Time.After(failed.NextFireAt.Time) {
+		t.Fatalf("the recovered check did not reschedule the rule: %+v", got)
+	}
+	if n := wakeRuns(t, f, w.ID); n != 0 {
+		t.Fatalf("an unmet condition started %d runs", n)
+	}
+}
