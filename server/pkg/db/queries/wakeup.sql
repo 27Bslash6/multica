@@ -181,8 +181,8 @@ UPDATE issue_wakeup SET updated_at=clock_timestamp() WHERE id= @id;
 UPDATE issue_wakeup SET enabled=false,next_fire_at=NULL,timed_out_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id= @id;
 
 -- name: SetWakeupConditionState :exec
--- A committed check clears an earlier check's error. An unmet condition never
--- reaches AdvanceIssueWakeup, so nothing else would.
+-- Writing condition state means evaluation succeeded, so clear any earlier
+-- failure; an unmet condition never reaches AdvanceIssueWakeup.
 UPDATE issue_wakeup SET condition_state= @condition_state,next_fire_at=sqlc.narg(next_fire_at),last_error=NULL,updated_at=clock_timestamp() WHERE id= @id;
 
 -- name: PauseIssueWakeup :exec
