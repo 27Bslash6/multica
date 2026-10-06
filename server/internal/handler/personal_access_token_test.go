@@ -367,8 +367,9 @@ func TestRenewPAT_RejectsTokenBelongingToDifferentUser(t *testing.T) {
 }
 
 // TestUpdatePersonalAccessTokenLastUsed_SkipsFreshStamp pins the guard that
-// stops the per-request cache-miss call from rewriting the row: a missing or
-// stale stamp is written, a stamp under a minute old is left alone.
+// stops the per-request cache-miss call from rewriting the row: a missing,
+// stale or future stamp is written, a stamp within a minute of now is left
+// alone.
 func TestUpdatePersonalAccessTokenLastUsed_SkipsFreshStamp(t *testing.T) {
 	ctx := context.Background()
 	_, patID := insertTestPAT(t, time.Time{})
@@ -415,5 +416,16 @@ func TestUpdatePersonalAccessTokenLastUsed_SkipsFreshStamp(t *testing.T) {
 	touch()
 	if refreshed, _ := stamp(); !refreshed.Time.After(stale.Time) {
 		t.Fatalf("expected a stale stamp to be refreshed, still %s", refreshed.Time)
+	}
+
+	if _, err := testPool.Exec(ctx,
+		`UPDATE personal_access_token SET last_used_at = now() + interval '2 hours' WHERE id = $1`, id,
+	); err != nil {
+		t.Fatalf("forward-date last_used_at: %v", err)
+	}
+	future, _ := stamp()
+	touch()
+	if corrected, _ := stamp(); !corrected.Time.Before(future.Time) {
+		t.Fatalf("expected a future stamp to be corrected, still %s", corrected.Time)
 	}
 }
