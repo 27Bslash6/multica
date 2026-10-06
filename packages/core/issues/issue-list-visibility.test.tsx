@@ -6,20 +6,19 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
 import { createQueryClient } from "../query-client";
-import type { Issue, ListIssuesParams, ListIssuesResponse } from "../types";
-import { PAGINATED_CATEGORIES, issueListOptions } from "./queries";
+import type { Issue, ListIssuesResponse } from "../types";
+import { issueListOptions } from "./queries";
 import { onIssueAuxiliaryRevision } from "./ws-updaters";
 
 /**
  * Every open tab is its own client and receives every issue and comment event.
  * Before this gate each event that touched a loaded issue cost one list re-read
- * per open tab, hidden ones included, and each re-read is one request per
- * status category.
+ * per open tab, hidden ones included.
  */
 
 const WS = "ws-1";
 const ISSUE_ID = "issue-1";
-const REREAD = PAGINATED_CATEGORIES.length;
+const REREAD = 1;
 let revision = 1;
 
 const issue = (): Issue =>
@@ -33,10 +32,7 @@ const issue = (): Issue =>
   }) as Issue;
 
 const listIssues = vi.fn(
-  async (params?: ListIssuesParams): Promise<ListIssuesResponse> =>
-    params?.status_category === "unstarted"
-      ? { issues: [issue()], total: 1 }
-      : { issues: [], total: 0 },
+  async (): Promise<ListIssuesResponse> => ({ issues: [issue()], total: 1 }),
 );
 
 beforeEach(() => {
