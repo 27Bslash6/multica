@@ -1,4 +1,5 @@
 import {
+  focusManager,
   infiniteQueryOptions,
   keepPreviousData,
   queryOptions,
@@ -362,6 +363,15 @@ export function issueTableFacetsOptions(
  * `setQueryData<ListIssuesCache>(...)` and preserve the byStatus shape.
  *
  * Fetches the first page of each paginated status in parallel.
+ *
+ * Fetches only while the page is on screen. Every open tab is its own client
+ * and receives every issue and comment event, so each event that touched a
+ * loaded issue cost one re-read per open tab, and each re-read is one request
+ * per status category. The readers (issue detail, issue chips) use the list as
+ * a lookup and render nothing while the page is hidden, so a hidden tab only
+ * marks the list invalidated. `refetchOnWindowFocus` re-reads it once when the
+ * page is shown again; with `staleTime: Infinity` a page that missed no event
+ * makes no request.
  */
 export function issueListOptions(wsId: string, sort?: IssueSortParam) {
   return queryOptions({
@@ -369,6 +379,8 @@ export function issueListOptions(wsId: string, sort?: IssueSortParam) {
     queryFn: () => fetchFirstPages({}, sort),
     select: flattenIssueBuckets,
     placeholderData: keepPreviousData,
+    enabled: () => focusManager.isFocused(),
+    refetchOnWindowFocus: true,
   });
 }
 
