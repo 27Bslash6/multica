@@ -167,8 +167,12 @@ const updatePersonalAccessTokenLastUsed = `-- name: UpdatePersonalAccessTokenLas
 UPDATE personal_access_token
 SET last_used_at = now()
 WHERE id = $1
+  AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')
 `
 
+// Callers fire this on every PAT cache miss, and without Redis every
+// request misses. Skipping a stamp under a minute old (the cache TTL)
+// keeps that path a read instead of rewriting one hot row per request.
 func (q *Queries) UpdatePersonalAccessTokenLastUsed(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, updatePersonalAccessTokenLastUsed, id)
 	return err
