@@ -57,6 +57,22 @@ func putChildDoneRule(t *testing.T, issueID string, body map[string]any, headers
 	return w
 }
 
+// seedChildDoneError records an error on the parent's rule, as a pass that
+// missed its lock wait does.
+func seedChildDoneError(t *testing.T, parentID string) {
+	t.Helper()
+	tag, err := testPool.Exec(context.Background(), `UPDATE issue_wakeup SET last_error = 'earlier failure'
+		WHERE issue_id = $1 AND system_rule IS NOT NULL`, parentID)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("seed the parent's rule error: %v (%d rows)", err, tag.RowsAffected())
+	}
+}
+
+func childDoneErrors(t *testing.T, parentID string) int {
+	t.Helper()
+	return dbfx.Count(t, `SELECT count(*) FROM issue_wakeup WHERE issue_id = $1 AND system_rule IS NOT NULL AND last_error IS NOT NULL`, parentID)
+}
+
 func TestSystemWakeupDescribesUnstagedWait(t *testing.T) {
 	fx := newChildDoneFixture(t, "in_progress")
 	rules := listSystemWakeupsFor(t, fx.parent.ID)
@@ -167,6 +183,22 @@ func TestSystemWakeupOverrideControlsChildDone(t *testing.T) {
 	})
 }
 
+// Turning the rule back on clears an error from before it was off at once:
+// nothing schedules a pass for it until a sub-issue changes.
+func TestSystemWakeupReenableClearsEarlierError(t *testing.T) {
+	fx := newChildDoneFixture(t, "in_progress")
+	if w := putChildDoneRule(t, fx.parent.ID, map[string]any{"enabled": false}); w.Code != http.StatusOK {
+		t.Fatalf("disable: %d %s", w.Code, w.Body.String())
+	}
+	seedChildDoneError(t, fx.parent.ID)
+	if w := putChildDoneRule(t, fx.parent.ID, map[string]any{"enabled": true}); w.Code != http.StatusOK {
+		t.Fatalf("enable: %d %s", w.Code, w.Body.String())
+	}
+	if childDoneErrors(t, fx.parent.ID) != 0 {
+		t.Fatal("re-enabling kept the earlier error")
+	}
+}
+
 // The workspace default applies to every rule nobody changed on its issue;
 // owners and admins set it.
 func TestWorkspaceSystemWakeupDefault(t *testing.T) {
@@ -214,9 +246,14 @@ func TestWorkspaceSystemWakeupDefault(t *testing.T) {
 	if got := len(childDoneEntries(t, follows.parent.ID)); got != 0 {
 		t.Fatalf("rule off by default fired: %d", got)
 	}
-	// Turning the default back on does not fire for what closed meanwhile.
+	// Turning the default back on does not fire for what closed meanwhile,
+	// and clears an error from before the rule was off.
+	seedChildDoneError(t, follows.parent.ID)
 	if rec := put(map[string]any{"enabled": true}, testUserID); rec.Code != http.StatusOK {
 		t.Fatalf("enable default: %d", rec.Code)
+	}
+	if childDoneErrors(t, follows.parent.ID) != 0 {
+		t.Fatal("enabling the default kept the earlier error")
 	}
 	dbfx.Exec(t, "UPDATE issue SET status='in_review' WHERE id=$1", follows.parent.ID)
 	runWakeupTick(t)

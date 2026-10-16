@@ -78,6 +78,8 @@ func systemRuleText(rule string) pgtype.Text { return pgtype.Text{String: rule, 
 
 // baselineChildDone records what already holds for a rule that was just
 // turned on, so facts that became true while it was off do not wake anyone.
+// It also drops an error from before: nothing schedules a pass for the rule
+// until a sub-issue changes, so the error would otherwise stay until then.
 func baselineChildDone(ctx context.Context, tx pgx.Tx, q *db.Queries, rule db.IssueWakeup) error {
 	children, err := loadSubIssues(ctx, tx, q, rule.IssueID, rule.WorkspaceID)
 	if err != nil {
@@ -87,7 +89,13 @@ func baselineChildDone(ctx context.Context, tx pgx.Tx, q *db.Queries, rule db.Is
 	if !met {
 		fingerprint = ""
 	}
-	return q.SetWakeupConditionState(ctx, db.SetWakeupConditionStateParams{ID: rule.ID, ConditionState: fingerprint})
+	if err = q.SetWakeupConditionState(ctx, db.SetWakeupConditionStateParams{ID: rule.ID, ConditionState: fingerprint}); err != nil {
+		return err
+	}
+	if !rule.LastError.Valid {
+		return nil
+	}
+	return q.NoteWakeupFailure(ctx, db.NoteWakeupFailureParams{ID: rule.ID})
 }
 
 // EnsureChildDoneRule returns the parent's rule, creating it when missing.
