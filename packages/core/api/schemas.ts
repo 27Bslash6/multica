@@ -739,6 +739,7 @@ export const EMPTY_ISSUE_PROPERTIES_RESPONSE: IssuePropertiesResponse = {
 
 export interface AppConfigResponse {
   cdn_domain: string;
+  attachment_public_url?: string;
   // True when the CDN domain serves private content via time-bounded signed
   // URLs (CloudFront signing) — raw storage URLs on that domain are NOT
   // publicly fetchable and must not be used as native media sources
@@ -1021,6 +1022,7 @@ export const EMPTY_REFRESH_SESSION_RESPONSE: RefreshSessionResponse = {
 
 export const AppConfigSchema = z.object({
   cdn_domain: z.string().default(""),
+  attachment_public_url: OptionalStringSchema,
   cdn_signed: BooleanWithDefaultSchema(false),
   allow_signup: BooleanWithDefaultSchema(true),
   google_client_id: OptionalStringSchema,
@@ -1041,6 +1043,7 @@ export const AppConfigSchema = z.object({
 
 export const EMPTY_APP_CONFIG: AppConfigResponse = {
   cdn_domain: "",
+  attachment_public_url: "",
   cdn_signed: false,
   allow_signup: true,
   google_client_id: "",
