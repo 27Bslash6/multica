@@ -90,15 +90,17 @@ export function patchArchivedInboxCaches(qc: QueryClient, wsId: string, patch: (
  * workspaces — the data is account-level, so switching workspaces does not
  * refetch it; only the derived "is this for another workspace" view changes.
  *
- * Observers gate on `inboxUnreadSummaryEnabled`, so an inbox event on a hidden
- * page only marks the summary invalidated. `refetchOnWindowFocus` re-reads it
+ * Visibility gating is the default, including for direct observers such as
+ * the search palette. `refetchOnWindowFocus` re-reads an invalidated summary
  * once when the page is shown again; with `staleTime: Infinity` a page that
- * missed no event is not stale and makes no request.
+ * missed no event is not stale and makes no request. The dock badge overrides
+ * `enabled` through `inboxUnreadSummaryEnabled` to stay live while hidden.
  */
 export function inboxUnreadSummaryOptions() {
   return queryOptions({
     queryKey: inboxKeys.unreadSummary(),
     queryFn: () => api.getInboxUnreadSummary(),
+    enabled: () => focusManager.isFocused(),
     refetchOnWindowFocus: true,
   });
 }
