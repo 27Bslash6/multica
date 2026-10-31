@@ -29,7 +29,10 @@ const pageState = {
   isFetchingNextPage: false, isFetchNextPageError: false,
   fetchNextPage: vi.fn(), refetch: vi.fn(),
 };
+const queryClient = vi.hoisted(() => ({ setQueryData: vi.fn() }));
 vi.mock("@tanstack/react-query", () => ({
+  queryOptions: (options: unknown) => options,
+  useQueryClient: () => queryClient,
   useQuery: (options: { queryKey: readonly unknown[]; enabled?: boolean }) => {
     queryCalls.push(options);
     const rows = options.queryKey.includes("archived") ? listData.archived : listData.active;
@@ -148,13 +151,15 @@ vi.mock("../../navigation", () => ({
 // about actioning a row WHILE it is open need the two-panel desktop layout,
 // since a single column swaps the list out for the detail on selection.
 const PHONE = 390;
-const FOLD_INNER = 851;
-const TABLET = 1024;
+// iPhone Duo's inner screen: 669px wide held upright, 951px held sideways.
+const FOLD_INNER_PORTRAIT = 669;
+const FOLD_INNER_LANDSCAPE = 951;
+const TABLET = 768;
 const DESKTOP = 1440;
 const layout = { width: PHONE };
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => layout.width < 768,
-  useIsCompact: () => layout.width < 1024,
+  useIsCompact: () => layout.width < 768,
 }));
 vi.mock("@multica/ui/components/ui/resizable", () => ({
   ResizablePanelGroup: ({ children }: { children: React.ReactNode }) => (
@@ -297,7 +302,7 @@ function reset() {
   queryCalls.length = 0;
   searchParams = new URLSearchParams();
   replace.mockClear();
-  markReadMutate.mockClear();
+  markReadMutate.mockReset();
   markUnreadMutate.mockClear();
   archiveMutate.mockClear();
   unarchiveMutate.mockClear();
@@ -420,7 +425,12 @@ describe("InboxPage", () => {
     render(<InboxPage />);
 
     expect(screen.queryByTestId("row")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Inbox" }));
+    // The test's `useT` names every control "Inbox"; the header's batch menu
+    // shares the name, so skip the menu trigger.
+    const clearFilters = screen
+      .getAllByRole("button", { name: "Inbox" })
+      .find((button) => !button.hasAttribute("aria-haspopup"));
+    fireEvent.click(clearFilters!);
     expect(screen.getByTestId("row")).toHaveTextContent("todo-high");
   });
 
@@ -756,6 +766,56 @@ describe("InboxPage", () => {
     expect(markReadMutate).toHaveBeenCalledWith("inbox-a", expect.anything());
   });
 
+  it("keeps an unread-filtered notification open after it is marked read", () => {
+    // Opening a row marks it read. With the unread filter on, that would drop
+    // the row before its detail renders and clear the selection, so the click
+    // looked like it only made the notification disappear.
+    reset();
+    layout.width = DESKTOP;
+    listData.active = [
+      item({ id: "inbox-a", issue_id: "issue-a", read: false }),
+    ];
+    useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
+    markReadMutate.mockImplementation((id: string) => {
+      listData.active = listData.active.map((current) =>
+        current.id === id ? { ...current, read: true } : current,
+      );
+    });
+
+    const { rerender } = render(<InboxPage />);
+    fireEvent.click(screen.getByTestId("row"));
+    rerender(<InboxPage />);
+
+    expect(screen.getByTestId("row")).toHaveTextContent("inbox-a");
+    expect(replace).not.toHaveBeenCalledWith("/acme/inbox");
+  });
+
+  it("keeps an unread-filtered notification open once the unread page drops it", () => {
+    // The active view is paged by the server too: re-read under "unread only",
+    // the page no longer returns the row just read. Its seeded lookup keeps it.
+    reset();
+    queryClient.setQueryData.mockClear();
+    layout.width = DESKTOP;
+    listData.active = [
+      item({ id: "inbox-a", issue_id: "issue-a", read: false }),
+    ];
+    useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
+
+    const { rerender } = render(<InboxPage />);
+    fireEvent.click(screen.getByTestId("row"));
+
+    expect(queryClient.setQueryData).toHaveBeenCalledWith(
+      ["inbox", "workspace-1", "list", "lookup"],
+      { items: [expect.objectContaining({ id: "inbox-a" })], hasMore: false, nextCursor: null },
+    );
+    listData.lookup = [{ ...listData.active[0]!, read: true }];
+    listData.active = [];
+    rerender(<InboxPage />);
+
+    expect(screen.getByTestId("row")).toHaveTextContent("inbox-a");
+    expect(replace).not.toHaveBeenCalledWith("/acme/inbox");
+  });
+
   it("keeps an explicitly unread row unread while it stays open", () => {
     // Without the guard the auto-read effect fires on the very next commit and
     // silently undoes the user's "mark as unread" — the action looks like a
@@ -799,12 +859,11 @@ describe("InboxPage", () => {
     expect(markReadMutate).toHaveBeenCalledWith("inbox-a", expect.anything());
   });
 
-  it("folds to a single column on a folded inner screen", () => {
-    // 851px — the reported Pixel Fold inner screen. Above the phone breakpoint
-    // but far too narrow for nav + list + detail, so it takes the same single
-    // column: opening a row replaces the list rather than sharing the width.
+  it("folds to a single column on a foldable's inner screen held upright", () => {
+    // Below the compact breakpoint the list and detail cannot share the
+    // width: opening a row replaces the list.
     reset();
-    layout.width = FOLD_INNER;
+    layout.width = FOLD_INNER_PORTRAIT;
     listData.active = [item({ id: "inbox-a", issue_id: "issue-a" })];
 
     render(<InboxPage />);
@@ -815,12 +874,13 @@ describe("InboxPage", () => {
     expect(screen.queryByTestId("list")).toBeNull();
   });
 
-  it("keeps both panes at the compact breakpoint", () => {
-    // 1024px is the first width that keeps the two-pane layout. The nav
+  it.each([TABLET, FOLD_INNER_LANDSCAPE])("keeps both panes at %spx", (width) => {
+    // 768px is the first width that keeps the two-pane layout. The nav
     // auto-collapses there instead (see the sidebar), so the list has to stay
-    // on screen next to an open item.
+    // on screen next to an open item — on a foldable's inner screen held
+    // sideways as much as on a tablet.
     reset();
-    layout.width = TABLET;
+    layout.width = width;
     listData.active = [item({ id: "inbox-a", issue_id: "issue-a" })];
 
     render(<InboxPage />);

@@ -1,9 +1,10 @@
 import type { InfiniteData, QueryClient, QueryKey } from "@tanstack/react-query";
 import type { InboxPage } from "../types/inbox";
-import { EMPTY_INBOX_FILTERS, type InboxFilters } from "./filter-store";
-import { focusManager, infiniteQueryOptions, queryOptions, useQuery } from "@tanstack/react-query";
+import { EMPTY_INBOX_FILTERS, type ArchivedInboxFilters } from "./filter-store";
+import { infiniteQueryOptions, queryOptions, useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import type { InboxItem, InboxWorkspaceUnread } from "../types";
+import { focusManager } from "@tanstack/react-query";
 
 export const inboxKeys = {
   all: (wsId: string) => ["inbox", wsId] as const,
@@ -24,7 +25,9 @@ export const inboxKeys = {
   unreadSummary: () => ["inbox", "unread-summary"] as const,
 };
 
-function normalizedInboxFilters(filters: InboxFilters): InboxFilters {
+// Lists the paged dimensions explicitly. Neither paged endpoint has an idle
+// dimension, so an `idleOnly` never changes a key or refetches a view.
+function normalizedInboxFilters(filters: ArchivedInboxFilters): ArchivedInboxFilters {
   return { statuses: [...filters.statuses].sort(), priorities: [...filters.priorities].sort(),
     actors: [...filters.actors].sort(), unreadOnly: filters.unreadOnly };
 }
@@ -33,7 +36,7 @@ function normalizedInboxFilters(filters: InboxFilters): InboxFilters {
  * The active inbox, one issue group per row, loaded a page at a time. Filters
  * are applied by the server, so they stay correct beyond the loaded pages.
  */
-export function inboxPagesOptions(wsId: string, filters: InboxFilters) {
+export function inboxPagesOptions(wsId: string, filters: ArchivedInboxFilters) {
   return infiniteQueryOptions({
     queryKey: [...inboxKeys.listPages(wsId), normalizedInboxFilters(filters)],
     initialPageParam: null as string | null,
@@ -44,7 +47,7 @@ export function inboxPagesOptions(wsId: string, filters: InboxFilters) {
 }
 
 /** One active group by key, for a selection beyond the loaded pages. */
-export function inboxLookupOptions(wsId: string, groupId: string, filters: InboxFilters = EMPTY_INBOX_FILTERS) {
+export function inboxLookupOptions(wsId: string, groupId: string, filters: ArchivedInboxFilters = EMPTY_INBOX_FILTERS) {
   return queryOptions({
     queryKey: [...inboxKeys.listLookup(wsId), groupId, normalizedInboxFilters(filters)],
     queryFn: ({ signal }) => api.listInboxPage(filters, { groupId, signal }),
@@ -53,7 +56,7 @@ export function inboxLookupOptions(wsId: string, groupId: string, filters: Inbox
   });
 }
 
-export function inboxFacetsOptions(wsId: string, filters: InboxFilters) {
+export function inboxFacetsOptions(wsId: string, filters: ArchivedInboxFilters) {
   return queryOptions({
     queryKey: [...inboxKeys.listFacets(wsId), normalizedInboxFilters(filters)],
     queryFn: ({ signal }) => api.getInboxFacets(filters, signal),
@@ -61,7 +64,7 @@ export function inboxFacetsOptions(wsId: string, filters: InboxFilters) {
   });
 }
 
-export function archivedInboxPagesOptions(wsId: string, filters: InboxFilters) {
+export function archivedInboxPagesOptions(wsId: string, filters: ArchivedInboxFilters) {
   return infiniteQueryOptions({
     queryKey: [...inboxKeys.pages(wsId), normalizedInboxFilters(filters)],
     initialPageParam: null as string | null,
@@ -71,7 +74,7 @@ export function archivedInboxPagesOptions(wsId: string, filters: InboxFilters) {
   });
 }
 
-export function archivedInboxLookupOptions(wsId: string, groupId: string, filters: InboxFilters = EMPTY_INBOX_FILTERS) {
+export function archivedInboxLookupOptions(wsId: string, groupId: string, filters: ArchivedInboxFilters = EMPTY_INBOX_FILTERS) {
   return queryOptions({
     queryKey: [...inboxKeys.lookup(wsId), groupId, normalizedInboxFilters(filters)],
     queryFn: ({ signal }) => api.listArchivedInboxPage(filters, { groupId, signal }),
@@ -80,7 +83,7 @@ export function archivedInboxLookupOptions(wsId: string, groupId: string, filter
   });
 }
 
-export function archivedInboxFacetsOptions(wsId: string, filters: InboxFilters) {
+export function archivedInboxFacetsOptions(wsId: string, filters: ArchivedInboxFilters) {
   return queryOptions({
     queryKey: [...inboxKeys.facets(wsId), normalizedInboxFilters(filters)],
     queryFn: ({ signal }) => api.getArchivedInboxFacets(filters, signal),
@@ -133,15 +136,17 @@ export function patchInboxCaches(qc: QueryClient, prefix: QueryKey, patch: (item
  * workspaces — the data is account-level, so switching workspaces does not
  * refetch it; only the derived "is this for another workspace" view changes.
  *
- * Observers gate on `inboxUnreadSummaryEnabled`, so an inbox event on a hidden
- * page only marks the summary invalidated. `refetchOnWindowFocus` re-reads it
+ * Visibility gating is the default, including for direct observers such as
+ * the search palette. `refetchOnWindowFocus` re-reads an invalidated summary
  * once when the page is shown again; with `staleTime: Infinity` a page that
- * missed no event is not stale and makes no request.
+ * missed no event is not stale and makes no request. The dock badge overrides
+ * `enabled` through `inboxUnreadSummaryEnabled` to stay live while hidden.
  */
 export function inboxUnreadSummaryOptions() {
   return queryOptions({
     queryKey: inboxKeys.unreadSummary(),
     queryFn: () => api.getInboxUnreadSummary(),
+    enabled: () => focusManager.isFocused(),
     refetchOnWindowFocus: true,
   });
 }

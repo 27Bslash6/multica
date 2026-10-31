@@ -635,7 +635,14 @@ func (o *Outbound) sendAsMessage(ctx context.Context, e events.Event, taskID pgt
 	if !hasVisibleChar(content) {
 		return answerOutcome{addr: addr}, nil
 	}
-	err = sender.sendTextCtx(ctx, addr.ChatID, addr.ChatType, content)
+	err = sender.sendTextCtx(guardReply(ctx, o.q, addr.InstallationID), addr.ChatID, addr.ChatType, content)
+	if errors.Is(err, errInstallationGone) && !errors.Is(err, errPartiallySent) {
+		// Revoked while this answer waited for its turn on the socket. Not a
+		// failed delivery: the same skip taskAddress files when the revocation
+		// came before the address was read. The files go nowhere either.
+		o.skippedFor(ctx, e.ChatSessionID, skipInstallationInactive)
+		return answerOutcome{addr: addr}, errNothingToSay
+	}
 	// Recorded here rather than returned, so this send and the relay's go
 	// through the one mapping in recordSend (#8344).
 	o.recordSend(ctx, e.ChatSessionID, e.Type, err)
@@ -729,9 +736,16 @@ func chatDoneTaskID(e events.Event) (pgtype.UUID, bool) {
 //
 // senders and streams are non-nil here: a turn has a bubble only through them.
 func (o *Outbound) finishStream(ctx context.Context, h streamHandle, text string) error {
-	err := o.streams.seal(ctx, o.senders, h, text)
+	err := o.streams.seal(guardReply(ctx, o.q, h.InstallationID), o.senders, h, text)
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, errInstallationGone) {
+		// Not a failed seal: nobody may write here any more. The caller's
+		// fallback reaches the same verdict on its own.
+		o.logger.InfoContext(ctx, "wecom outbound: bubble left open, installation revoked",
+			"installation_id", uuidStringPub(h.InstallationID))
+		return err
 	}
 	o.logger.WarnContext(ctx, "wecom outbound: in-place reply failed, sending a new message instead",
 		"installation_id", uuidStringPub(h.InstallationID),
@@ -949,7 +963,7 @@ func (o *Outbound) pushInbox(ctx context.Context, item map[string]any, binding d
 		// reach WeCom and the caller may offer it to the recipient-wide binding.
 		return false, true
 	}
-	if err := sender.sendTextCtx(ctx, binding.ChannelUserID, chatTypeSingleInt, content); err != nil {
+	if err := sender.sendTextCtx(guardReply(ctx, o.q, binding.InstallationID), binding.ChannelUserID, chatTypeSingleInt, content); err != nil {
 		o.logger.WarnContext(ctx, "wecom outbound: inbox push failed",
 			"error", err, "installation_id", uuidStringPub(binding.InstallationID),
 			"recipient_id", recipientIDStr)
@@ -1055,4 +1069,126 @@ func inboxStringField(v any) string {
 // engine.uuidString (a different package).
 func uuidStringPub(u pgtype.UUID) string {
 	return util.UUIDToString(u)
+}
+
+// installationCheck is what one permission read established. Three outcomes,
+// because collapsing them is how the first version of this gate lost answers:
+// a lookup that failed and a row that says revoked are the same refusal for THIS
+// attempt and opposite facts about every later one.
+type installationCheck int
+
+const (
+	// installationOK — active. Write.
+	installationOK installationCheck = iota
+	// installationGone — revoked, or the row is not there. Final: nobody may
+	// write to it again, and an answer held for it is not owed to anyone.
+	installationGone
+	// installationUnreadable — the read itself failed. Nothing is established.
+	// Refuse this attempt either way; what differs is what the caller owes
+	// afterwards. An answer must NOT be reported finished — it is still the only
+	// copy and still this subscriber's to deliver. An attachment has nowhere to
+	// report to and nothing to lose by waiting: the file stays in object storage
+	// and the user can ask again, so the delivery simply stops.
+	installationUnreadable
+)
+
+// String names the outcomes for the log, so a line saying a delivery stopped
+// also says whether anything is coming back — gone is final, unreadable is this
+// read and no more. Same reason deliveryState carries one (outbound_media.go).
+func (c installationCheck) String() string {
+	switch c {
+	case installationOK:
+		return "ok"
+	case installationGone:
+		return "gone"
+	case installationUnreadable:
+		return "unreadable"
+	default:
+		return "invalid"
+	}
+}
+
+// mayStillWrite reads the installation's permission for one attempt.
+//
+// The three-way split follows the convention the rest of this file already
+// keeps: pgx.ErrNoRows is a fact, every other error is a failed question. The
+// gate that preceded this returned a bool and answered "no" to both, so a
+// database blip on one attempt confirmed a one-shot chat:done as handled and
+// threw the answer away.
+func (o *Outbound) mayStillWrite(ctx context.Context, id pgtype.UUID) installationCheck {
+	return readInstallationCheck(ctx, o.q, id)
+}
+
+// installationReader is the one read a permission check makes. Both the
+// outbound subscriber's queries and the typing manager's delivery lookup carry
+// it, which is what lets the two ask the same question of the same row.
+type installationReader interface {
+	GetChannelInstallation(ctx context.Context, arg db.GetChannelInstallationParams) (db.ChannelInstallation, error)
+}
+
+// readInstallationCheck is mayStillWrite for a caller that is not the outbound
+// subscriber.
+func readInstallationCheck(ctx context.Context, q installationReader, id pgtype.UUID) installationCheck {
+	if !id.Valid {
+		return installationGone
+	}
+	inst, err := q.GetChannelInstallation(ctx, db.GetChannelInstallationParams{
+		ID:          id,
+		ChannelType: channelTypeWecom,
+	})
+	switch {
+	case err == nil:
+	case errors.Is(err, pgx.ErrNoRows):
+		return installationGone
+	default:
+		return installationUnreadable
+	}
+	if inst.Status != string(InstallationActive) {
+		return installationGone
+	}
+	return installationOK
+}
+
+// errInstallationGone marks a reply frame refused at the socket because its
+// installation was revoked, or its row is gone, after the reply was addressed.
+// What it settles is the obligation: there is no longer an installation to
+// deliver through, so the reply is not owed to anyone — skipInstallationInactive,
+// the same outcome taskAddress reaches when the revocation came first.
+var errInstallationGone = errors.New("wecom: installation revoked")
+
+// replyWriteGuard is the permission check for the frames of a reply: the
+// message, each piece of a long one, and the closing frame of its bubble. It
+// is installed in the context (withWriteGuard) and run by the ws layer with
+// the writer in hand, for the same reason attachmentWriteGuard is: the address
+// was read once, before the chat's turn and the writer's, and a revocation in
+// between is otherwise written straight through.
+//
+// Unlike attachmentWriteGuard it keeps the two refusals apart, because a reply
+// has an outcome to report and the two are opposite facts about it. Gone is
+// errInstallationGone. Unreadable is a lookup that failed ahead of the write —
+// the dropTransport case, and on the relay one more offer, since the answer is
+// still owed and still the only copy.
+func replyWriteGuard(q installationReader, id pgtype.UUID) func(context.Context) error {
+	return func(ctx context.Context) error {
+		ctx, cancel := context.WithTimeout(ctx, permissionReadBudget)
+		defer cancel()
+		switch check := readInstallationCheck(ctx, q, id); check {
+		case installationOK:
+			return nil
+		case installationGone:
+			return errInstallationGone
+		default:
+			return fmt.Errorf("wecom: installation could not be read (%s)", check)
+		}
+	}
+}
+
+// guardReply puts replyWriteGuard on ctx. A nil reader leaves ctx as it was:
+// a manager built without a delivery lookup has nothing to ask, and writes as
+// it did before the guard existed.
+func guardReply(ctx context.Context, q installationReader, id pgtype.UUID) context.Context {
+	if q == nil {
+		return ctx
+	}
+	return withWriteGuard(ctx, replyWriteGuard(q, id))
 }

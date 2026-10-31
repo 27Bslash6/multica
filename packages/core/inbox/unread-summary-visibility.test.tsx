@@ -1,13 +1,13 @@
 /** @vitest-environment jsdom */
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { QueryClientProvider, focusManager } from "@tanstack/react-query";
+import { QueryClientProvider, focusManager, useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
 import { createQueryClient } from "../query-client";
 import type { InboxWorkspaceUnread } from "../types";
-import { useInboxUnreadCount } from "./queries";
+import { inboxUnreadSummaryOptions, useInboxUnreadCount } from "./queries";
 import { onInboxSummaryInvalidate } from "./ws-updaters";
 
 /**
@@ -88,6 +88,29 @@ it("a page shown again after no inbox event makes no request", async () => {
   await setPageVisible(true);
 
   expect(getInboxUnreadSummary).toHaveBeenCalledTimes(1);
+});
+
+it("a default summary observer defers hidden events alongside the sidebar reader", async () => {
+  const qc = createQueryClient();
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+  );
+  const view = renderHook(() => ({
+    sidebar: useInboxUnreadCount(WS),
+    summary: useQuery(inboxUnreadSummaryOptions()).data,
+  }), { wrapper });
+  await waitFor(() => expect(view.result.current.sidebar).toBe(1));
+  await setPageVisible(false);
+
+  await inboxEvent(qc);
+  await inboxEvent(qc);
+  await inboxEvent(qc);
+  expect(getInboxUnreadSummary).toHaveBeenCalledTimes(1);
+
+  await setPageVisible(true);
+  await waitFor(() => expect(view.result.current.sidebar).toBe(4));
+  expect(view.result.current.summary).toEqual([{ workspace_id: WS, count: 4 }]);
+  expect(getInboxUnreadSummary).toHaveBeenCalledTimes(2);
 });
 
 it("a page opened hidden fetches the summary when it is first shown", async () => {

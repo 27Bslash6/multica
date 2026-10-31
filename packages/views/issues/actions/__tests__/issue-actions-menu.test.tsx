@@ -211,14 +211,34 @@ describe("IssueActionsDropdown", () => {
     expect(screen.getByText("Priority")).toBeInTheDocument();
     expect(screen.getByText("Assignee")).toBeInTheDocument();
     expect(screen.getByText("Due date")).toBeInTheDocument();
+    expect(screen.getByText("Rename issue")).toBeInTheDocument();
     expect(screen.getByText("Open in new tab")).toBeInTheDocument();
     expect(screen.getByText("Copy link")).toBeInTheDocument();
+    expect(screen.getByText("Create sub-issue")).toBeInTheDocument();
     expect(screen.getByText("Relations")).toBeInTheDocument();
     expect(screen.getByText("Delete issue")).toBeInTheDocument();
-    // Relationship actions are hidden inside the "Relations" submenu by default.
-    expect(screen.queryByText("Create sub-issue")).not.toBeInTheDocument();
+    // Linking to existing issues stays inside the "Relations" submenu.
     expect(screen.queryByText("Set parent issue...")).not.toBeInTheDocument();
     expect(screen.queryByText("Add sub-issue...")).not.toBeInTheDocument();
+  });
+
+  it("lists Create sub-issue directly below Rename issue", async () => {
+    render(
+      wrap(
+        <IssueActionsDropdown
+          issue={mockIssue}
+          trigger={<button data-testid="trigger">Menu</button>}
+        />,
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("trigger"));
+    await screen.findByText("Rename issue");
+
+    const labels = screen
+      .getAllByRole("menuitem")
+      .map((item) => item.textContent?.trim());
+    expect(labels.slice(0, 3)).toEqual(["Rename issue", "Create sub-issue", "Status"]);
   });
 
   it("clicking the Assignee item opens the shared AssigneePicker popover", async () => {
@@ -298,6 +318,48 @@ describe("IssueActionsDropdown", () => {
       issueId: "issue-1",
       identifier: "TES-1",
       onDeletedFallbackPath: "/test/issues",
+    });
+  });
+
+  it("clicking Create sub-issue opens the create modal parented to this issue", async () => {
+    render(
+      wrap(
+        <IssueActionsDropdown
+          issue={mockIssue}
+          trigger={<button data-testid="trigger">Menu</button>}
+        />,
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("trigger"));
+    fireEvent.click(await screen.findByText("Create sub-issue"));
+
+    expect(mockOpenModal).toHaveBeenCalledWith(
+      "create-issue",
+      expect.objectContaining({
+        parent_issue_id: "issue-1",
+        parent_issue_identifier: "TES-1",
+      }),
+    );
+  });
+
+  it("clicking Rename issue opens the rename modal with the current title", async () => {
+    render(
+      wrap(
+        <IssueActionsDropdown
+          issue={mockIssue}
+          trigger={<button data-testid="trigger">Menu</button>}
+        />,
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("trigger"));
+    fireEvent.click(await screen.findByText("Rename issue"));
+
+    expect(mockOpenModal).toHaveBeenCalledWith("issue-rename", {
+      issueId: "issue-1",
+      identifier: "TES-1",
+      title: "Example",
     });
   });
 
@@ -435,6 +497,7 @@ describe("IssueActionsContextMenu", () => {
     expect(await screen.findByText("Status")).toBeInTheDocument();
     // The right-click surface is what list rows, board cards, gantt bars and
     // sub-issue rows all share, so this one assertion covers them together.
+    expect(screen.getByText("Rename issue")).toBeInTheDocument();
     expect(screen.getByText("Open in new tab")).toBeInTheDocument();
     expect(screen.getByText("Delete issue")).toBeInTheDocument();
   });

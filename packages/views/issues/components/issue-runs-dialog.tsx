@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { ArrowRight, Ban, ChevronRight, XCircle } from "lucide-react";
+import { ArrowRight, Ban, ChevronRight, XCircle } from "@multica/ui/icons";
 import type { AgentTask } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import {
@@ -11,9 +11,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
+import { TruncatedTooltip } from "@multica/ui/components/common/truncated-tooltip";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { DeferredTooltip } from "../../common/deferred-tooltip";
 import { TranscriptButton } from "../../common/task-transcript";
 import { cancellationActorLabel, cancelReasonLabel, failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { Segmented } from "../../dashboard/components/dashboard-shared";
@@ -851,15 +853,16 @@ function RunListRow({ run, issueId }: { run: TimelineRun; issueId: string }) {
             tooltip and, whole and wrapped, at the top of the transcript. */}
         <RunTriggerLabel task={task} fallback={label}>
           {(text) => (
-            <span
-              title={text}
-              className={cn(
-                "min-w-0 flex-1 truncate text-label",
-                run.usage || run.active ? "text-foreground" : "text-muted-foreground",
-              )}
-            >
-              {text}
-            </span>
+            <TruncatedTooltip content={text}>
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate text-label",
+                  run.usage || run.active ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {text}
+              </span>
+            </TruncatedTooltip>
           )}
         </RunTriggerLabel>
         <ArrowRight aria-hidden className={cn(COL.arrow, "size-3 text-faint-foreground")} />
@@ -930,16 +933,21 @@ function RunListRow({ run, issueId }: { run: TimelineRun; issueId: string }) {
           {canRetryRun(task) && <RetryRunButton task={task} issueId={issueId} />}
         </span>
         <span className={cn(COL.toggle, "flex justify-end")}>
-          <button
-            type="button"
-            aria-expanded={expanded}
-            aria-controls={detailsId}
-            aria-label={t(($) => $.runs_timeline.details_toggle)}
-            onClick={() => setExpanded((v) => !v)}
-            className="flex size-6 items-center justify-center rounded-xs text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-          >
-            <ChevronRight aria-hidden className={cn("size-3.5 transition-transform", expanded && "rotate-90")} />
-          </button>
+          <DeferredTooltip
+            content={t(($) => $.runs_timeline.details_toggle)}
+            trigger={
+              <button
+                type="button"
+                aria-expanded={expanded}
+                aria-controls={detailsId}
+                aria-label={t(($) => $.runs_timeline.details_toggle)}
+                onClick={() => setExpanded((v) => !v)}
+                className="flex size-6 items-center justify-center rounded-xs text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                <ChevronRight aria-hidden className={cn("size-3.5 transition-transform", expanded && "rotate-90")} />
+              </button>
+            }
+          />
         </span>
       </div>
       {expanded && <RunDetails id={detailsId} run={run} reason={reason} />}
@@ -1033,9 +1041,11 @@ function RunDetails({ id, run, reason }: { id: string; run: TimelineRun; reason:
         {run.task.branch_name && (
           <>
             <dt className="text-muted-foreground">{t(($) => $.runs_timeline.detail_branch)}</dt>
-            <dd className="min-w-0 truncate font-mono text-micro" title={run.task.branch_name}>
-              {run.task.branch_name}
-            </dd>
+            <TruncatedTooltip content={run.task.branch_name}>
+              <dd className="min-w-0 truncate font-mono text-micro">
+                {run.task.branch_name}
+              </dd>
+            </TruncatedTooltip>
           </>
         )}
       </dl>

@@ -143,6 +143,8 @@
     "field_name": "Nom",
     "field_name_placeholder": "Relecture de code",
     "field_target": "S'exécute en tant que",
+    "no_target": "Aucune cible",
+    "no_target_hint": "Publie un message sans mentionner personne.",
     "field_prompt": "Invite",
     "field_prompt_placeholder": "Relire le code lié à cette tâche. Se concentrer sur la justesse et les cas limites.",
     "prompt_hint": "Envoyée telle quelle. L'agent voit déjà la tâche.",
@@ -166,7 +168,8 @@
     "language": {
       "title": "Langue",
       "english": "English",
-      "chinese": "中文",
+      "chinese": "简体中文",
+      "chinese_traditional": "繁體中文",
       "korean": "한국어",
       "japanese": "日本語",
       "french": "Français",
@@ -680,8 +683,7 @@
     },
     "system": {
       "title": "Notifications système",
-      "description": "Afficher les notifications système lorsque Multica est en arrière-plan.",
-      "label": "Afficher les notifications système"
+      "label": "Afficher les notifications système lorsque Multica est en arrière-plan"
     },
     "browser": {
       "label": "Notifications du navigateur",
@@ -1223,6 +1225,15 @@
   "desktop": {
     "tabs": {
       "updates": "Mises à jour"
+    },
+    "tab_bar": {
+      "pin": "Épingler l'onglet",
+      "unpin": "Désépingler l'onglet",
+      "close": "Fermer l'onglet",
+      "close_others": "Fermer les autres onglets",
+      "open_window": "Ouvrir dans une nouvelle fenêtre",
+      "new": "Nouvel onglet",
+      "pinned_name": "{{title}} (épinglé)"
     },
     "updates": {
       "title": "Mises à jour",

@@ -568,6 +568,7 @@ export const IssueWorkflowSchema = z.object({
   name: z.string(),
   description: z.string().default(""),
   is_default: z.boolean().default(false),
+  owner_id: z.string().nullable().default(null),
   steps: z.array(IssueWorkflowStepSchema).default([]),
   project_ids: z.array(z.string()).default([]),
   created_at: z.string(),
@@ -590,6 +591,7 @@ export const EMPTY_ISSUE_WORKFLOW: IssueWorkflow = {
   name: "",
   description: "",
   is_default: false,
+  owner_id: null,
   steps: [],
   project_ids: [],
   created_at: "",
@@ -878,6 +880,7 @@ export interface AppConfigResponse {
   analytics_environment?: string;
   daemon_server_url?: string;
   daemon_app_url?: string;
+  daemon_setup_target?: "cloud" | "self_host" | "unknown";
   workspace_creation_disabled?: boolean;
   /** Whether this deployment offers the self-hosted Git provider integration
    * (self-host only; off on the managed cloud). Absent/false hides the whole
@@ -1155,6 +1158,7 @@ export const AppConfigSchema = z.object({
   analytics_environment: OptionalStringSchema,
   daemon_server_url: OptionalStringSchema,
   daemon_app_url: OptionalStringSchema,
+  daemon_setup_target: z.enum(["cloud", "self_host", "unknown"]).optional().catch("unknown"),
   workspace_creation_disabled: BooleanWithDefaultSchema(false).optional(),
   vcs_integration_available: BooleanWithDefaultSchema(false).optional(),
   feature_flags: FeatureFlagsSchema,
@@ -1173,6 +1177,7 @@ export const EMPTY_APP_CONFIG: AppConfigResponse = {
   google_client_id: "",
   daemon_server_url: "",
   daemon_app_url: "",
+  daemon_setup_target: "unknown",
   workspace_creation_disabled: false,
   vcs_integration_available: false,
   // Fail closed: an unreadable config must not look like a server that
@@ -2321,6 +2326,7 @@ export const StoredAgentDraftSchema = z.object({
     .catch("private"),
   member_ids: z.array(z.string()).catch([]),
   team_ids: z.array(z.string()).catch([]),
+  qoder_agent_id: z.string().catch(""),
   applied_message_id: z.string().nullable().catch(null),
   dismissed_message_id: z.string().nullish().catch(null),
 }).loose();
@@ -2467,6 +2473,17 @@ export const DuplicateIssueErrorBodySchema = z.object({
     title: z.string(),
   }).loose(),
 }).loose();
+
+// A destructive confirmation must fail closed on an incomplete plan. Do not
+// default missing arrays to empty or silently discard malformed entries.
+export const RuntimeAccessRevocationPlanSchema = z.object({
+  code: z.enum(["runtime_has_nonowner_dependents", "runtime_access_revocation_plan_changed"]),
+  nonowner_agents: z.array(z.object({ id: z.string().uuid(), name: z.string() })),
+  active_task_ids: z.array(z.string().uuid()),
+}).refine((body) =>
+  new Set(body.nonowner_agents.map((agent) => agent.id)).size === body.nonowner_agents.length &&
+  new Set(body.active_task_ids).size === body.active_task_ids.length,
+).transform((body) => ({ agents: body.nonowner_agents, activeTaskIds: body.active_task_ids }));
 
 export interface DuplicateIssueErrorBody {
   code: "active_duplicate_issue";
@@ -3705,8 +3722,8 @@ export const WakeupConditionSchema = z.union([
   z.object({ type: z.literal("issue_field"), field: z.literal("label"), label_id: z.string() }),
   z.object({ type: z.literal("issue_field"), field: z.literal("property"), property_id: z.string(), value: z.unknown() }),
   z.object({ type: z.literal("children_done"), stage: z.number().int().nullish() }),
-  z.object({ type: z.literal("pull_request"), event: z.enum(["checks_finished", "merged"]) }),
-  z.object({ type: z.literal("other_issue"), issue_id: z.string(), state: z.enum(["done", "ended", "in_review"]), identifier: z.string().optional() }),
+  z.object({ type: z.literal("pull_request"), event: z.enum(["checks_finished", "merged", "conflicts"]) }),
+  z.object({ type: z.literal("other_issue"), issue_id: z.string(), state: z.enum(["done", "ended", "in_review", "blocked"]), identifier: z.string().optional() }),
 ]);
 
 export const WakeupRunSchema = z.object({

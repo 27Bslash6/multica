@@ -13,7 +13,7 @@ import {
   Trash2,
   Users,
   X,
-} from "lucide-react";
+} from "@multica/ui/icons";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
@@ -38,6 +38,7 @@ import {
 } from "@multica/core/squads/stores";
 import type { Agent, MemberWithUser, Squad } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
+import { IconButton } from "@multica/ui/components/common/icon-button";
 import {
   Dialog,
   DialogContent,
@@ -91,6 +92,7 @@ import {
 } from "../../layout/collection-page";
 import { useLocale, useT } from "../../i18n";
 import { PAGE_TOOLBAR } from "../../layout/page-header";
+import { DeferredTooltip } from "@multica/ui/components/common/deferred-tooltip";
 
 // Column template — the simplest member of the ListGrid family (squads are
 // the fewest entity, 1-5 rows): subgrid template + var tracks + two-zone
@@ -325,15 +327,20 @@ function SquadRowActions({ squad }: { squad: Squad }) {
       className="flex items-center"
     >
       <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <button
-              type="button"
-              aria-label={t(($) => $.page.row_menu)}
-              className="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-accent-foreground group-hover/row:opacity-100 data-popup-open:bg-accent data-popup-open:opacity-100 data-popup-open:text-accent-foreground"
-            >
-              <MoreHorizontal className="size-4" />
-            </button>
+        <DeferredTooltip
+          content={t(($) => $.page.row_menu)}
+          trigger={
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={t(($) => $.page.row_menu)}
+                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-accent-foreground group-hover/row:opacity-100 data-popup-open:bg-accent data-popup-open:opacity-100 data-popup-open:text-accent-foreground"
+                >
+                  <MoreHorizontal className="size-4" />
+                </button>
+              }
+            />
           }
         />
         <DropdownMenuContent align="end" className="w-40">
@@ -711,7 +718,7 @@ function SquadListToolbar({
                   </DropdownMenuRadioGroup>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <Button
+              <IconButton
                 variant="outline"
                 size="icon-sm"
                 onClick={() =>
@@ -719,7 +726,7 @@ function SquadListToolbar({
                     sortDirection === "asc" ? "desc" : "asc",
                   )
                 }
-                title={
+                label={
                   sortDirection === "asc"
                     ? t(($) => $.toolbar.direction_asc)
                     : t(($) => $.toolbar.direction_desc)
@@ -730,7 +737,7 @@ function SquadListToolbar({
                 ) : (
                   <ArrowDown className="size-3.5" />
                 )}
-              </Button>
+              </IconButton>
             </div>
           </div>
           <div className="px-3 py-2.5">
@@ -916,9 +923,7 @@ export function SquadsPage() {
         }
       />
 
-      {isLoading ? (
-        <LoadingSkeleton />
-      ) : squads.length === 0 ? (
+      {!isLoading && squads.length === 0 ? (
         <CollectionPageState
           icon={Users}
           title={t(($) => $.page.empty_no_squads)}
@@ -934,6 +939,8 @@ export function SquadsPage() {
         />
       ) : (
         <>
+          {/* Mounted through loading so the rows don't drop by a toolbar's
+              height when the list lands. */}
           <SquadListToolbar
             scope={scope}
             onScopeChange={setScope}
@@ -952,6 +959,9 @@ export function SquadsPage() {
             hiddenColumns={hiddenColumns}
             onToggleColumn={toggleColumn}
           />
+          {isLoading ? (
+            <LoadingSkeleton />
+          ) : (
           <div className="min-h-0 flex-1 overflow-auto @container">
             <ListGrid
               className={`${GRID_COLS} @2xl:min-w-[var(--sqc-minw)]`}
@@ -1020,6 +1030,7 @@ export function SquadsPage() {
               )}
             </ListGrid>
           </div>
+          )}
         </>
       )}
     </div>

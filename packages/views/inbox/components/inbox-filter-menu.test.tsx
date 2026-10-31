@@ -103,6 +103,7 @@ function renderMenu({
   setApiInstance({
     getInboxFacets,
     getArchivedInboxFacets,
+    getAgentTaskSnapshot: async () => [],
     listIssueStatuses: async () => ({
       statuses: statusEntries,
       categories: [],
@@ -287,5 +288,14 @@ describe("InboxFilterMenu", () => {
         screen.getByRole("button", { name: "1 active filter" }),
       ).toHaveTextContent("1"),
     );
+  });
+
+  // Both views are filtered by the server, which has no idle dimension.
+  it.each([false, true])("offers no idle filter (archived: %s)", async (archived) => {
+    renderMenu({ archived });
+
+    fireEvent.click(screen.getByRole("button", { name: "Filter inbox" }));
+    await screen.findByRole("menuitemcheckbox", { name: /Unread only/ });
+    expect(screen.queryByRole("menuitemcheckbox", { name: /No agents working/ })).toBeNull();
   });
 });

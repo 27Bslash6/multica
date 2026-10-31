@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CircleDot, Filter, Mail, RotateCcw, SignalHigh, UserRound } from "lucide-react";
+import { CircleDot, Filter, Mail, RotateCcw, SignalHigh, UserRound } from "@multica/ui/icons";
 import { PRIORITY_DISPLAY_ORDER } from "@multica/core/issues/config";
 import {
   inboxActorKeyParts,
@@ -14,6 +14,7 @@ import { archivedInboxFacetsOptions, inboxFacetsOptions } from "@multica/core/in
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { InboxItem } from "@multica/core/types";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import { IconButton } from "@multica/ui/components/common/icon-button";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   DropdownMenu,
@@ -109,11 +110,11 @@ export function InboxFilterMenu({
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger
         render={
-          <Button
+          <IconButton
             variant={activeCount > 0 ? "default" : "ghost"}
             size="icon-sm"
-            aria-label={triggerLabel}
-            title={triggerLabel}
+            label={triggerLabel}
+            tooltipSide="bottom"
             className={cn(
               "text-muted-foreground",
               activeCount > 0 &&
@@ -145,6 +146,8 @@ export function InboxFilterMenu({
             </span>
           )}
         </DropdownMenuCheckboxItem>
+        {/* No "no agents working" filter: both views are filtered server-side,
+            which has no idle dimension. */}
         <DropdownMenuSeparator />
 
         {actorOptions.length > 0 && (
