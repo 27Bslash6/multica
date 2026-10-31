@@ -2,11 +2,12 @@ import { useEffect, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
 import { useInboxFilterStore, type InboxFilters } from "@multica/core/inbox/filter-store";
 import { archivedInboxLookupOptions, inboxKeys } from "@multica/core/inbox/queries";
-import { onInboxIssueDeleted, patchInboxIssueProjection } from "@multica/core/inbox/ws-updaters";
+import { onInboxInvalidate, onInboxIssueDeleted, patchInboxIssueProjection } from "@multica/core/inbox/ws-updaters";
 import type { InboxPage as InboxPageData } from "@multica/core/types/inbox";
 import type { InboxItem } from "@multica/core/types";
 import { InboxPage } from "./inbox-page";
@@ -169,6 +170,94 @@ it("keeps the active read selection until moving to another notification", async
   expect(screen.getByTestId("detail")).toHaveTextContent("issue-b");
   expect(screen.queryByText("inbox-a")).not.toBeInTheDocument();
   expect(screen.getByText("inbox-b")).toHaveAttribute("data-read", "true");
+});
+
+// Every write fails, but only when the test releases it: an unguarded retry
+// then shows up as one more pending call instead of thousands of renders.
+function failingReadFixture(rows: InboxItem[]) {
+  vi.mocked(toast.error).mockClear();
+  const listInboxPage = vi.fn(async (filters: InboxFilters, options: { groupId?: string }) => {
+    if (options.groupId) return page(rows.filter((row) => row.issue_id === options.groupId));
+    return page(rows.filter((row) => !filters.unreadOnly || !row.read));
+  });
+  const pending: ((err: Error) => void)[] = [];
+  const markInboxRead = vi.fn((_id: string) => new Promise<InboxItem>((_resolve, reject) => { pending.push(reject); }));
+  setApiInstance({ listInboxPage, markInboxRead, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+  return {
+    pageReads: () => listInboxPage.mock.calls.filter((call) => !call[1].groupId).length,
+    markReads: (id: string) => markInboxRead.mock.calls.filter(([called]) => called === id).length,
+    failWrites: () => act(async () => {
+      for (const reject of pending.splice(0)) reject(new Error("server error"));
+    }),
+    quiet: () => act(() => new Promise<void>((resolve) => { setTimeout(resolve, 100); })),
+  };
+}
+
+it.each([true, false])("tries a failing mark-read once while the row stays open, not again on every rollback (unread only: %s)", async (unreadOnly) => {
+  // The failure rolls the open row back to unread, which is what auto-read
+  // reacts to: unguarded, each failure starts another write, another inbox
+  // re-read and another toast.
+  if (!unreadOnly) useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
+  const { pageReads, markReads, failWrites, quiet } = failingReadFixture([item()]);
+
+  renderPage();
+  fireEvent.click(await screen.findByText("inbox-a"));
+  await waitFor(() => expect(markReads("inbox-a")).toBe(1));
+  await failWrites();
+  await waitFor(() => expect(toast.error).toHaveBeenCalledOnce());
+  await waitFor(() => expect(pageReads()).toBeGreaterThanOrEqual(2));
+  const readsAfterFailure = pageReads();
+  await quiet();
+  expect(markReads("inbox-a")).toBe(1);
+  expect(pageReads()).toBe(readsAfterFailure);
+  expect(toast.error).toHaveBeenCalledOnce();
+  expect(screen.getByText("inbox-a")).toHaveAttribute("data-read", "false");
+});
+
+it("tries a failed mark-read once more when the row is opened again", async () => {
+  // Opening a row that is already read writes nothing, so only leaving the
+  // failed row can release it for the next open.
+  useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
+  const { markReads, failWrites, quiet } = failingReadFixture([
+    item(), item({ id: "inbox-b", issue_id: "issue-b", read: true }),
+  ]);
+
+  renderPage();
+  fireEvent.click(await screen.findByText("inbox-a"));
+  await waitFor(() => expect(markReads("inbox-a")).toBe(1));
+  await failWrites();
+  await waitFor(() => expect(toast.error).toHaveBeenCalledOnce());
+  fireEvent.click(screen.getByText("inbox-b"));
+  await waitFor(() => expect(screen.getByTestId("detail")).toHaveTextContent("issue-b"));
+  fireEvent.click(screen.getByText("inbox-a"));
+  await waitFor(() => expect(markReads("inbox-a")).toBe(2));
+  await failWrites();
+  await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
+  await quiet();
+  expect(markReads("inbox-a")).toBe(2);
+  expect(markReads("inbox-b")).toBe(0);
+});
+
+it("marks the open row read again when it turns unread after a write that succeeded", async () => {
+  // Only a failed write holds the row back: another client flagging it
+  // unread while it is open still gets it read again.
+  useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
+  let rows = [item()];
+  const listInboxPage = vi.fn(async (_filters: InboxFilters, options: { groupId?: string }) =>
+    page(rows.filter((row) => !options.groupId || row.issue_id === options.groupId)));
+  const markInboxRead = vi.fn(async (id: string) => {
+    rows = rows.map((row) => row.id === id ? { ...row, read: true } : row);
+    return rows.find((row) => row.id === id)!;
+  });
+  setApiInstance({ listInboxPage, markInboxRead, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+
+  renderPage();
+  fireEvent.click(await screen.findByText("inbox-a"));
+  await waitFor(() => expect(markInboxRead).toHaveBeenCalledOnce());
+  await waitFor(() => expect(screen.getByText("inbox-a")).toHaveAttribute("data-read", "true"));
+  rows = rows.map((row) => ({ ...row, read: false }));
+  await act(async () => { await onInboxInvalidate(qc, "workspace-1"); });
+  await waitFor(() => expect(markInboxRead).toHaveBeenCalledTimes(2));
 });
 
 it.each(["click", "url"])("keeps the archived row and detail mounted through refetch and slow lookup after %s selection, then releases the pin", async (selection) => {

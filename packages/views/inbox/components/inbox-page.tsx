@@ -342,17 +342,27 @@ export function InboxPage() {
   // re-opening the row later marks it read again like any other open.
   const manualUnreadIdRef = useRef<string | null>(null);
 
+  // A failed mark-read rolls the open row back to unread, which re-fires the
+  // auto-read effect below: unguarded, every failure starts another write,
+  // another inbox re-read and another toast. Holds the id the effect last
+  // wrote for. It is set before the write, so no rollback can beat it, and
+  // cleared once the write succeeds or the selection moves off the row, so
+  // re-opening a row whose write failed tries once more.
+  const autoReadIdRef = useRef<string | null>(null);
+
   // Auto-mark-read whenever a selected item is unread — covers both click-
   // to-select and URL-param-select (e.g. OS notification click on desktop).
-  // The mutation flips `read: true` optimistically, so this effect settles
-  // in one pass and can't loop. Kept in a `useEffect` rather than inlined
-  // in handleSelect so URL-driven selection triggers it too.
+  // The mutation flips `read: true` optimistically, so on success this effect
+  // settles in one pass, and `autoReadIdRef` stops it re-firing on a failed
+  // write's rollback. Kept in a `useEffect` rather than inlined in
+  // handleSelect so URL-driven selection triggers it too.
   const markReadMutate = markReadMutation.mutate;
   const selectedId = selected?.id;
   const selectedRead = selected?.read;
   useEffect(() => {
     if (!selectedId || selectedRead) return;
     if (manualUnreadIdRef.current === selectedId) return;
+    if (autoReadIdRef.current === selectedId) return;
     if (filters.unreadOnly) {
       pinnedUnreadKeyRef.current = selectedKey;
       if (selected) {
@@ -366,7 +376,11 @@ export function InboxPage() {
         });
       }
     }
+    autoReadIdRef.current = selectedId;
     markReadMutate(selectedId, {
+      onSuccess: () => {
+        if (autoReadIdRef.current === selectedId) autoReadIdRef.current = null;
+      },
       onError: (err) =>
         toast.error(
           err instanceof Error && err.message
@@ -380,6 +394,9 @@ export function InboxPage() {
   useEffect(() => {
     if (manualUnreadIdRef.current && manualUnreadIdRef.current !== selectedId) {
       manualUnreadIdRef.current = null;
+    }
+    if (autoReadIdRef.current && autoReadIdRef.current !== selectedId) {
+      autoReadIdRef.current = null;
     }
     if (pinnedUnreadKeyRef.current && pinnedUnreadKeyRef.current !== selectedKey) {
       pinnedUnreadKeyRef.current = null;
