@@ -56,7 +56,7 @@ vi.mock("./inbox-list", () => ({
 }));
 vi.mock("./inbox-filter-menu", () => ({ InboxFilterMenu: () => null }));
 vi.mock("./inbox-list-item", () => ({ useTimeAgo: () => vi.fn() }));
-let rowActions: { onAction: (id: string) => void };
+let rowActions: { onAction: (id: string) => void; onMarkRead: (id: string) => void };
 vi.mock("./inbox-context-menu", () => ({
   InboxContextMenuProvider: ({ actions, children }: { actions: typeof rowActions; children: ReactNode }) => {
     rowActions = actions;
@@ -258,6 +258,64 @@ it("marks the open row read again when it turns unread after a write that succee
   rows = rows.map((row) => ({ ...row, read: false }));
   await act(async () => { await onInboxInvalidate(qc, "workspace-1"); });
   await waitFor(() => expect(markInboxRead).toHaveBeenCalledTimes(2));
+});
+
+it("marks the open row read again when it turns unread after an explicit read succeeded", async () => {
+  // The auto-read failed, so the row is held back; reading it explicitly
+  // proves the server accepts the write and releases it.
+  useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
+  let rows = [item()];
+  const markInboxRead = vi.fn(async (id: string) => {
+    if (markInboxRead.mock.calls.length === 1) throw new Error("server error");
+    rows = rows.map((row) => row.id === id ? { ...row, read: true } : row);
+    return rows.find((row) => row.id === id)!;
+  });
+  setApiInstance({ listInboxPage: async () => page(rows), markInboxRead,
+    getInboxUnreadSummary: async () => [],
+  } as unknown as ApiClient);
+  const quiet = () => act(() => new Promise<void>((resolve) => { setTimeout(resolve, 100); }));
+
+  renderPage();
+  fireEvent.click(await screen.findByText("inbox-a"));
+  await waitFor(() => expect(markInboxRead).toHaveBeenCalledOnce());
+  await waitFor(() => expect(screen.getByText("inbox-a")).toHaveAttribute("data-read", "false"));
+  await quiet();
+  act(() => rowActions.onMarkRead("inbox-a"));
+  await waitFor(() => expect(markInboxRead).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.getByText("inbox-a")).toHaveAttribute("data-read", "true"));
+  await quiet();
+  rows = rows.map((row) => ({ ...row, read: false }));
+  await act(async () => { await onInboxInvalidate(qc, "workspace-1"); });
+  await waitFor(() => expect(markInboxRead).toHaveBeenCalledTimes(3));
+});
+
+it("marks the open row read again after its auto-read succeeded behind an explicit read of another row", async () => {
+  // Both writes share one mutation hook, so the explicit read replaces the
+  // auto-read's mutate() callbacks while the auto-read is still in flight.
+  useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
+  let rows = [item(), item({ id: "inbox-b", issue_id: "issue-b" })];
+  const gate = deferred<void>();
+  const markInboxRead = vi.fn(async (id: string) => {
+    rows = rows.map((row) => row.id === id ? { ...row, read: true } : row);
+    if (id === "inbox-a" && markInboxRead.mock.calls.filter(([called]) => called === id).length === 1) await gate.promise;
+    return rows.find((row) => row.id === id)!;
+  });
+  setApiInstance({ listInboxPage: async () => page(rows), markInboxRead,
+    getInboxUnreadSummary: async () => [],
+  } as unknown as ApiClient);
+  const quiet = () => act(() => new Promise<void>((resolve) => { setTimeout(resolve, 100); }));
+
+  renderPage();
+  fireEvent.click(await screen.findByText("inbox-a"));
+  await waitFor(() => expect(markInboxRead).toHaveBeenCalledOnce());
+  act(() => rowActions.onMarkRead("inbox-b"));
+  await waitFor(() => expect(markInboxRead).toHaveBeenCalledTimes(2));
+  await act(async () => gate.resolve());
+  await quiet();
+  expect(screen.getByText("inbox-a")).toHaveAttribute("data-read", "true");
+  rows = rows.map((row) => row.id === "inbox-a" ? { ...row, read: false } : row);
+  await act(async () => { await onInboxInvalidate(qc, "workspace-1"); });
+  await waitFor(() => expect(markInboxRead.mock.calls.filter(([id]) => id === "inbox-a")).toHaveLength(2));
 });
 
 it.each(["click", "url"])("keeps the archived row and detail mounted through refetch and slow lookup after %s selection, then releases the pin", async (selection) => {

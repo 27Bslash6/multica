@@ -346,9 +346,13 @@ export function InboxPage() {
   // auto-read effect below: unguarded, every failure starts another write,
   // another inbox re-read and another toast. Holds the id the effect last
   // wrote for. It is set before the write, so no rollback can beat it, and
-  // cleared once the write succeeds or the selection moves off the row, so
-  // re-opening a row whose write failed tries once more.
+  // cleared once any write for that row succeeds or the selection moves off
+  // it, so re-opening a row whose write failed tries once more.
   const autoReadIdRef = useRef<string | null>(null);
+  // mutate()'s callbacks run only for the latest call on a hook instance. On
+  // the instance the explicit action uses, an explicit read of another row
+  // would drop the auto-read's success release, so the auto-read has its own.
+  const autoReadMutate = useMarkInboxRead().mutate;
 
   // Auto-mark-read whenever a selected item is unread — covers both click-
   // to-select and URL-param-select (e.g. OS notification click on desktop).
@@ -356,7 +360,6 @@ export function InboxPage() {
   // settles in one pass, and `autoReadIdRef` stops it re-firing on a failed
   // write's rollback. Kept in a `useEffect` rather than inlined in
   // handleSelect so URL-driven selection triggers it too.
-  const markReadMutate = markReadMutation.mutate;
   const selectedId = selected?.id;
   const selectedRead = selected?.read;
   useEffect(() => {
@@ -377,7 +380,7 @@ export function InboxPage() {
       }
     }
     autoReadIdRef.current = selectedId;
-    markReadMutate(selectedId, {
+    autoReadMutate(selectedId, {
       onSuccess: () => {
         if (autoReadIdRef.current === selectedId) autoReadIdRef.current = null;
       },
@@ -388,7 +391,7 @@ export function InboxPage() {
             : t(($) => $.errors.mark_read_failed),
         ),
     });
-  }, [selectedId, selectedRead, selectedKey, selected, filters.unreadOnly, isArchivedView, queryClient, wsId, markReadMutate, t]);
+  }, [selectedId, selectedRead, selectedKey, selected, filters.unreadOnly, isArchivedView, queryClient, wsId, autoReadMutate, t]);
 
   // Release the guards as soon as the selection moves off their row.
   useEffect(() => {
@@ -437,6 +440,11 @@ export function InboxPage() {
     // Reading it back explicitly cancels an earlier park on the same row.
     if (manualUnreadIdRef.current === id) manualUnreadIdRef.current = null;
     markReadMutation.mutate(id, {
+      // The server took this row's write, so a failed auto-read's hold on it
+      // no longer applies.
+      onSuccess: () => {
+        if (autoReadIdRef.current === id) autoReadIdRef.current = null;
+      },
       onError: (err) =>
         toast.error(
           err instanceof Error && err.message
