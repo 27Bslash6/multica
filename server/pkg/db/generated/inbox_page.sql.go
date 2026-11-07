@@ -23,33 +23,45 @@ WITH newest AS MATERIALIZED (
       AND i.recipient_id = $2::uuid
       AND i.archived = false
     ORDER BY COALESCE(i.issue_id, i.id), i.created_at DESC, i.id DESC
+), busy AS (
+    SELECT atq.issue_id FROM agent_task_queue atq
+    JOIN agent a ON a.id = atq.agent_id
+    WHERE a.workspace_id = $1::uuid AND atq.issue_id IS NOT NULL
+      AND (atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+           OR (atq.status = 'deferred' AND atq.context->>'wakeup_id' IS NOT NULL))
 ), projected AS (
-    SELECT newest.id, newest.issue_id, newest.created_at, newest.read, newest.actor, iss.status AS issue_status, iss.priority AS issue_priority
+    SELECT newest.id, newest.issue_id, newest.created_at, newest.read, newest.actor, iss.status AS issue_status, iss.priority AS issue_priority,
+           (iss.id IS NOT NULL AND iss.id NOT IN (SELECT issue_id FROM busy)) AS idle
     FROM newest
     LEFT JOIN issue iss ON iss.id = newest.issue_id
       AND iss.workspace_id = $1::uuid
 ), matched AS (
-    SELECT projected.id, projected.issue_id, projected.created_at, projected.read, projected.actor, projected.issue_status, projected.issue_priority,
+    SELECT projected.id, projected.issue_id, projected.created_at, projected.read, projected.actor, projected.issue_status, projected.issue_priority, projected.idle,
            (cardinality($3::text[]) = 0 OR issue_status = ANY($3::text[])) AS status_match,
            (cardinality($4::text[]) = 0 OR issue_priority = ANY($4::text[])) AS priority_match,
            (cardinality($5::text[]) = 0 OR actor = ANY($5::text[])) AS actor_match,
-           (NOT $6::boolean OR NOT read) AS read_match
+           (NOT $6::boolean OR NOT read) AS read_match,
+           (NOT $7::boolean OR idle) AS idle_match
     FROM projected
 )
 SELECT 'statuses'::text AS dimension, issue_status::text AS key,
-       count(*) FILTER (WHERE priority_match AND actor_match AND read_match)::bigint AS count
+       count(*) FILTER (WHERE priority_match AND actor_match AND read_match AND idle_match)::bigint AS count
 FROM matched WHERE issue_status IS NOT NULL GROUP BY issue_status
 UNION ALL
 SELECT 'priorities'::text, issue_priority::text,
-       count(*) FILTER (WHERE status_match AND actor_match AND read_match)::bigint
+       count(*) FILTER (WHERE status_match AND actor_match AND read_match AND idle_match)::bigint
 FROM matched WHERE issue_priority IS NOT NULL GROUP BY issue_priority
 UNION ALL
 SELECT 'actors'::text, actor::text,
-       count(*) FILTER (WHERE status_match AND priority_match AND read_match)::bigint
+       count(*) FILTER (WHERE status_match AND priority_match AND read_match AND idle_match)::bigint
 FROM matched WHERE actor IS NOT NULL GROUP BY actor
 UNION ALL
 SELECT 'unread'::text, 'unread'::text,
-       count(*) FILTER (WHERE status_match AND priority_match AND actor_match AND NOT read)::bigint
+       count(*) FILTER (WHERE status_match AND priority_match AND actor_match AND idle_match AND NOT read)::bigint
+FROM matched
+UNION ALL
+SELECT 'idle'::text, 'idle'::text,
+       count(*) FILTER (WHERE status_match AND priority_match AND actor_match AND read_match AND idle)::bigint
 FROM matched
 `
 
@@ -60,6 +72,7 @@ type InboxFacetsParams struct {
 	Priorities  []string    `json:"priorities"`
 	Actors      []string    `json:"actors"`
 	UnreadOnly  bool        `json:"unread_only"`
+	IdleOnly    bool        `json:"idle_only"`
 }
 
 type InboxFacetsRow struct {
@@ -78,6 +91,7 @@ func (q *Queries) InboxFacets(ctx context.Context, arg InboxFacetsParams) ([]Inb
 		arg.Priorities,
 		arg.Actors,
 		arg.UnreadOnly,
+		arg.IdleOnly,
 	)
 	if err != nil {
 		return nil, err
@@ -111,26 +125,37 @@ WITH newest AS MATERIALIZED (
       AND ($3::uuid IS NULL OR i.issue_id = $3::uuid
            OR (i.issue_id IS NULL AND i.id = $3::uuid))
     ORDER BY COALESCE(i.issue_id, i.id), i.created_at DESC, i.id DESC
+), busy AS (
+    -- Issues an agent is running or queued on: the active half of
+    -- ListWorkspaceAgentTaskSnapshot, which the client's activity badge reads.
+    SELECT atq.issue_id FROM agent_task_queue atq
+    JOIN agent a ON a.id = atq.agent_id
+    WHERE a.workspace_id = $1::uuid AND atq.issue_id IS NOT NULL
+      AND (atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+           OR (atq.status = 'deferred' AND atq.context->>'wakeup_id' IS NOT NULL))
 ), projected AS (
-    SELECT newest.id, newest.issue_id, newest.created_at, newest.read, newest.actor, iss.status AS issue_status, iss.priority AS issue_priority
+    -- Idle asks about the issue, so a group without one is never idle.
+    SELECT newest.id, newest.issue_id, newest.created_at, newest.read, newest.actor, iss.status AS issue_status, iss.priority AS issue_priority,
+           (iss.id IS NOT NULL AND iss.id NOT IN (SELECT issue_id FROM busy)) AS idle
     FROM newest
     LEFT JOIN issue iss ON iss.id = newest.issue_id
       AND iss.workspace_id = $1::uuid
 ), matched AS (
-    SELECT projected.id, projected.issue_id, projected.created_at, projected.read, projected.actor, projected.issue_status, projected.issue_priority,
+    SELECT projected.id, projected.issue_id, projected.created_at, projected.read, projected.actor, projected.issue_status, projected.issue_priority, projected.idle,
            (cardinality($4::text[]) = 0 OR issue_status = ANY($4::text[])) AS status_match,
            (cardinality($5::text[]) = 0 OR issue_priority = ANY($5::text[])) AS priority_match,
            (cardinality($6::text[]) = 0 OR actor = ANY($6::text[])) AS actor_match,
-           (NOT $7::boolean OR NOT read) AS read_match
+           (NOT $7::boolean OR NOT read) AS read_match,
+           (NOT $8::boolean OR idle) AS idle_match
     FROM projected
 )
 , selected AS (
-    SELECT id, issue_id, created_at, read, actor, issue_status, issue_priority, status_match, priority_match, actor_match, read_match FROM matched
-    WHERE status_match AND priority_match AND actor_match AND read_match
-      AND ($8::timestamptz IS NULL OR
-           (created_at, id) < ($8::timestamptz, $9::uuid))
+    SELECT id, issue_id, created_at, read, actor, issue_status, issue_priority, idle, status_match, priority_match, actor_match, read_match, idle_match FROM matched
+    WHERE status_match AND priority_match AND actor_match AND read_match AND idle_match
+      AND ($9::timestamptz IS NULL OR
+           (created_at, id) < ($9::timestamptz, $10::uuid))
     ORDER BY created_at DESC, id DESC
-    LIMIT $10::int
+    LIMIT $11::int
 )
 SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details, selected.issue_status, selected.issue_priority,
        COALESCE(anchor.comment_id, '')::text AS comment_id
@@ -156,6 +181,7 @@ type ListInboxPageParams struct {
 	Priorities  []string           `json:"priorities"`
 	Actors      []string           `json:"actors"`
 	UnreadOnly  bool               `json:"unread_only"`
+	IdleOnly    bool               `json:"idle_only"`
 	BeforeTime  pgtype.Timestamptz `json:"before_time"`
 	BeforeID    pgtype.UUID        `json:"before_id"`
 	PageLimit   int32              `json:"page_limit"`
@@ -182,6 +208,7 @@ func (q *Queries) ListInboxPage(ctx context.Context, arg ListInboxPageParams) ([
 		arg.Priorities,
 		arg.Actors,
 		arg.UnreadOnly,
+		arg.IdleOnly,
 		arg.BeforeTime,
 		arg.BeforeID,
 		arg.PageLimit,

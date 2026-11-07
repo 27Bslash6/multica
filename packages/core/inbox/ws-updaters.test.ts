@@ -11,6 +11,7 @@ import {
   onInboxInvalidate,
   onInboxIssueDeleted,
   onInboxNew,
+  onInboxIdleChange,
   onInboxIssueStatusChanged,
   onInboxSummaryInvalidate,
   patchInboxIssueProjection,
@@ -18,6 +19,8 @@ import {
 import { EMPTY_INBOX_FILTERS } from "./filter-store";
 import {
   archivedInboxPagesOptions,
+  inboxFacetsOptions,
+  inboxLookupOptions,
   inboxCacheItems,
   inboxKeys,
   inboxPagesOptions,
@@ -174,6 +177,32 @@ describe("onInboxInvalidate ordering", () => {
     await onInboxInvalidate(qc, wsId);
 
     expect(calls).toEqual(["cancel", "invalidate"]);
+  });
+});
+
+describe("onInboxIdleChange", () => {
+  it("re-reads the active facets and idle-filtered pages, and nothing a task cannot change", async () => {
+    const qc = new QueryClient();
+    const idle = { ...EMPTY_INBOX_FILTERS, idleOnly: true };
+    const keys = {
+      idlePages: inboxPagesOptions(wsId, idle).queryKey,
+      idleUnreadPages: inboxPagesOptions(wsId, { ...idle, unreadOnly: true }).queryKey,
+      facets: inboxFacetsOptions(wsId, EMPTY_INBOX_FILTERS).queryKey,
+      pages: activePagesKey,
+      lookup: inboxLookupOptions(wsId, "issue-1").queryKey,
+      archivedPages: archivedPagesKey,
+      otherWorkspace: inboxPagesOptions("ws-2", idle).queryKey,
+    };
+    for (const key of Object.values<QueryKey>(keys)) qc.setQueryData(key, {});
+
+    await onInboxIdleChange(qc, wsId);
+
+    const invalidated = Object.fromEntries(Object.entries(keys).map(([name, key]) =>
+      [name, qc.getQueryState(key)?.isInvalidated]));
+    expect(invalidated).toEqual({
+      idlePages: true, idleUnreadPages: true, facets: true,
+      pages: false, lookup: false, archivedPages: false, otherWorkspace: false,
+    });
   });
 });
 
