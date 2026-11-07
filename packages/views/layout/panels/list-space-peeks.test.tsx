@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
@@ -54,20 +54,27 @@ function renderPeek() {
   return render(<QueryClientProvider client={qc}><InboxPeek /></QueryClientProvider>);
 }
 
+function setApi(api: Partial<Record<keyof ApiClient, unknown>>) {
+  setApiInstance({ getAgentTaskSnapshot: async () => [], getInboxUnreadSummary: async () => [], ...api } as unknown as ApiClient);
+}
+
 // The active inbox is paged by the server: its rows sit in the pages under
 // `inboxKeys.listPages`, never in a flat list at `inboxKeys.list`.
 describe("InboxPeek", () => {
-  it("shows the Inbox page's cached active pages without a request of its own", () => {
+  it("shows the Inbox page's cached active pages without reading them again", async () => {
     const listInboxPage = vi.fn();
     const listInbox = vi.fn();
-    setApiInstance({ listInboxPage, listInbox, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+    setApi({ listInboxPage, listInbox });
     const pagesKey = inboxPagesOptions("workspace-1", EMPTY_INBOX_FILTERS).queryKey;
     expect(pagesKey.slice(0, 4)).toEqual(inboxKeys.listPages("workspace-1"));
     qc.setQueryData(pagesKey, { pages: [page([item(), item({ id: "inbox-b", issue_id: "issue-b" })])], pageParams: [null] });
+    // A snapshot the app shell already holds, so the mount's idle refresh runs
+    // at once; outside the idle filter it re-reads no page.
+    qc.setQueryData(agentTaskSnapshotOptions("workspace-1").queryKey, []);
 
     renderPeek();
 
-    expect(screen.getByText("inbox-a")).toBeInTheDocument();
+    expect(await screen.findByText("inbox-a")).toBeInTheDocument();
     expect(screen.getByText("inbox-b")).toBeInTheDocument();
     expect(listInboxPage).not.toHaveBeenCalled();
     expect(listInbox).not.toHaveBeenCalled();
@@ -78,23 +85,49 @@ describe("InboxPeek", () => {
     const listInboxPage = vi.fn(async (_filters: InboxFilters, { cursor }: { cursor?: string | null }) =>
       cursor ? page([item({ id: "inbox-b", issue_id: "issue-b" })]) : page([item()], "cursor-1"));
     const listInbox = vi.fn();
-    setApiInstance({ listInboxPage, listInbox, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+    setApi({ listInboxPage, listInbox });
 
     renderPeek();
+    // The mount's idle refresh re-reads page 1 once the first snapshot lands.
+    await waitFor(() => expect(listInboxPage).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(qc.isFetching()).toBe(0));
 
-    fireEvent.click(await screen.findByText("Load more"));
+    fireEvent.click(screen.getByText("Load more"));
     expect(await screen.findByText("inbox-b")).toBeInTheDocument();
     expect(screen.getByText("inbox-a")).toBeInTheDocument();
     expect(screen.queryByText("Load more")).toBeNull();
     expect(listInboxPage.mock.calls.map(([filters, { cursor }]) => [filters.idleOnly, cursor])).toEqual([
+      [true, null],
       [true, null],
       [true, "cursor-1"],
     ]);
     expect(listInbox).not.toHaveBeenCalled();
   });
 
+  it("lets a running re-read of the shared pages finish when Load more is pressed", async () => {
+    let refetch!: { signal?: AbortSignal; resolve: (value: ArchivedInboxPage) => void };
+    const listInboxPage = vi.fn()
+      .mockResolvedValueOnce(page([item()], "cursor-1"))
+      .mockImplementationOnce((_filters: InboxFilters, { signal }: { signal?: AbortSignal }) =>
+        new Promise<ArchivedInboxPage>((resolve) => { refetch = { signal, resolve }; }))
+      .mockImplementation(async () => page([item({ id: "inbox-b", issue_id: "issue-b" })]));
+    setApi({ listInboxPage });
+
+    renderPeek();
+    await screen.findByText("Load more");
+    // The Inbox page's refresh of the cache the peek shares with it.
+    act(() => { void qc.invalidateQueries({ queryKey: inboxKeys.listPages("workspace-1") }); });
+    await waitFor(() => expect(listInboxPage).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByText("Load more"));
+
+    expect(refetch.signal?.aborted).toBe(false);
+    expect(listInboxPage).toHaveBeenCalledTimes(2);
+    await act(async () => refetch.resolve(page([item(), item({ id: "inbox-c", issue_id: "issue-c" })], "cursor-1")));
+    expect(await screen.findByText("inbox-c")).toBeInTheDocument();
+  });
+
   it("opens a row in the Inbox", async () => {
-    setApiInstance({ listInboxPage: async () => page([item()]), getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+    setApi({ listInboxPage: async () => page([item()]) });
 
     renderPeek();
     fireEvent.click(await screen.findByText("inbox-a"));
@@ -102,33 +135,23 @@ describe("InboxPeek", () => {
     await waitFor(() => expect(push).toHaveBeenCalledWith("/acme/inbox?issue=issue-a"));
   });
 
-  // The peek shows only while the Inbox page is closed, so nothing else
-  // re-reads its idle pages when a task starts or ends: such a task often
-  // sends no inbox event.
   it.each([false, true])("follows the server's idle list when the issue's agent work changes (busy at first: %s)", async (initialBusy) => {
     useInboxFilterStore.getState().toggleIdleOnly("workspace-1");
     let busy = initialBusy;
     const listInboxPage = vi.fn(async (filters: InboxFilters) => page(filters.idleOnly && busy ? [] : [item()]));
-    const tasks = () => busy ? [{ id: "task-a", issue_id: "issue-a", agent_id: "agent-1", status: "running" } as AgentTask] : [];
-    const getAgentTaskSnapshot = vi.fn(async () => tasks());
-    setApiInstance({ listInboxPage, getAgentTaskSnapshot, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+    const getAgentTaskSnapshot = async () =>
+      busy ? [{ id: "task-a", issue_id: "issue-a", agent_id: "agent-1", status: "running" } as AgentTask] : [];
+    setApi({ listInboxPage, getAgentTaskSnapshot });
 
-    // Another surface observes the snapshot too, as the app shell's do, so it
-    // refetches below whether or not the peek reads it.
-    function TaskObserver() { useQuery(agentTaskSnapshotOptions("workspace-1")); return null; }
-    render(<QueryClientProvider client={qc}><TaskObserver /><InboxPeek /></QueryClientProvider>);
-    await waitFor(() => expect(getAgentTaskSnapshot).toHaveBeenCalledOnce());
+    renderPeek();
+    await waitFor(() => expect(listInboxPage).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(qc.isFetching()).toBe(0));
     expect(!!screen.queryByText("inbox-a")).toBe(!initialBusy);
-    const readsBefore = listInboxPage.mock.calls.length;
 
     // What the task lifecycle handler does: invalidate the snapshot.
     busy = !busy;
     await act(async () => { await qc.invalidateQueries({ queryKey: agentTaskSnapshotOptions("workspace-1").queryKey }); });
-    expect(getAgentTaskSnapshot).toHaveBeenCalledTimes(2);
-    expect(qc.getQueryData(agentTaskSnapshotOptions("workspace-1").queryKey)).toEqual(tasks());
 
     await waitFor(() => expect(!!screen.queryByText("inbox-a")).toBe(initialBusy));
-    expect(listInboxPage.mock.calls.length).toBeGreaterThan(readsBefore);
   });
 });

@@ -228,7 +228,7 @@ describe("InboxList archive pagination", () => {
 describe("InboxList active pagination", () => {
   const props = { items, view: "inbox" as const, selectedKey: "", onSelect: vi.fn(), onAction: vi.fn() };
 
-  it("loads the next page at the end, and offers it below the rows", () => {
+  it("loads the next page at the list end and from the Load more button", () => {
     const onLoadMore = vi.fn();
     render(<InboxList {...props} onLoadMore={onLoadMore} />);
     fireEvent.click(screen.getByRole("button", { name: "Reach list end" }));

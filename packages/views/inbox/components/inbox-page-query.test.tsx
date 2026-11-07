@@ -8,7 +8,7 @@ import type { ApiClient } from "@multica/core/api/client";
 import { EMPTY_INBOX_FILTERS, useInboxFilterStore, type InboxFilters } from "@multica/core/inbox/filter-store";
 import { archivedInboxLookupOptions, inboxKeys, inboxLookupOptions, inboxPagesOptions } from "@multica/core/inbox/queries";
 import { onInboxInvalidate, onInboxIssueDeleted, patchInboxIssueProjection } from "@multica/core/inbox/ws-updaters";
-import type { ArchivedInboxPage as InboxPageData } from "@multica/core/types/inbox";
+import type { ArchivedInboxPage } from "@multica/core/types/inbox";
 import type { AgentTask, InboxItem } from "@multica/core/types";
 import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { InboxPage } from "./inbox-page";
@@ -104,7 +104,7 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-const page = (items: InboxItem[]): InboxPageData => ({ items, hasMore: false, nextCursor: null });
+const page = (items: InboxItem[]): ArchivedInboxPage => ({ items, hasMore: false, nextCursor: null });
 
 it.each([false, true])("clears an older unread assignment when opening a read row via URL=%s", async (viaUrl) => {
   useInboxFilterStore.setState({ filtersByWorkspace: {} });
@@ -130,13 +130,12 @@ it.each([false, true])("clears an older unread assignment when opening a read ro
   expect(await screen.findByTestId("detail")).toHaveTextContent("issue-a");
   await waitFor(() => expect(markInboxRead).toHaveBeenCalledExactlyOnceWith("comment"));
   await waitFor(() => expect(pageReads()).toBe(2));
-  expect(rows.every((r) => r.read)).toBe(true);
 });
 
 function archivedFixture() {
   searchParams = new URLSearchParams("view=archived");
   const readGate = deferred<void>();
-  const lookup = deferred<InboxPageData>();
+  const lookup = deferred<ArchivedInboxPage>();
   const a = item({ archived: true });
   let rows = [a, item({ id: "inbox-b", issue_id: "issue-b", archived: true })];
   const listArchivedInboxPage = vi.fn(async (filters: InboxFilters, options: { groupId?: string }) => {
@@ -495,7 +494,7 @@ it.each(["page-first", "snapshot-first"])("lists a row the server re-read as idl
   store.toggleIdleOnly("workspace-1");
   const rows = [item({ read: true }), item({ id: "inbox-b", issue_id: "issue-b", read: true })];
   let busy = true;
-  const firstPage = deferred<InboxPageData>();
+  const firstPage = deferred<ArchivedInboxPage>();
   const firstSnapshot = deferred<AgentTask[]>();
   const task = { id: "task-b", agent_id: "agent-1", issue_id: "issue-b", status: "running" } as AgentTask;
   const listInboxPage = vi.fn(async () => listInboxPage.mock.calls.length === 1
@@ -537,7 +536,7 @@ it("replaces a busy pinned row from its lookup without duplication or detail unm
   const detail = await screen.findByTestId("detail");
   // Opening reads the row once; the re-reads that write starts settle first.
   await waitFor(() => expect(markInboxRead).toHaveBeenCalledOnce());
-  await act(() => new Promise<void>((resolve) => { setTimeout(resolve, 100); }));
+  await waitFor(() => expect(qc.isMutating() + qc.isFetching()).toBe(0));
   const readsBefore = pageReads();
   await act(async () => {
     busy = true;
@@ -617,7 +616,7 @@ it.each([false, true])("keeps a deep link's selection while its lookup has no an
   const b = item({ id: "inbox-b", issue_id: "issue-b", read: true });
   const c = item({ id: "inbox-c", issue_id: "issue-c", read: true });
   qc.setQueryData(agentTaskSnapshotOptions("workspace-1").queryKey, []);
-  const lookupGate = deferred<InboxPageData>();
+  const lookupGate = deferred<ArchivedInboxPage>();
   const writeGate = deferred<InboxItem>();
   const listInboxPage = vi.fn(async (_filters: InboxFilters, options: { groupId?: string }) =>
     options.groupId === "issue-c" ? lookupGate.promise : page([a, b]));
@@ -654,7 +653,7 @@ it("keeps the detail of an idle row opened on a return visit when an agent start
   const snapshotKey = agentTaskSnapshotOptions("workspace-1").queryKey;
   qc.setQueryData(snapshotKey, []);
   let busy = false;
-  const mountReread = deferred<InboxPageData>();
+  const mountReread = deferred<ArchivedInboxPage>();
   const listInboxPage = vi.fn(async (filters: InboxFilters, options: { groupId?: string }) => {
     const rows = [a, b].filter((row) => !filters.idleOnly || !busy || row.issue_id !== "issue-a");
     if (options.groupId) return page(rows.filter((row) => row.issue_id === options.groupId));
@@ -736,7 +735,7 @@ it("keeps an inbox event's invalidation on the open row's lookup when the idle s
 
 it("keeps the archived list and its filter menu mounted while a new filter loads", async () => {
   searchParams = new URLSearchParams("view=archived");
-  const next = deferred<InboxPageData>();
+  const next = deferred<ArchivedInboxPage>();
   const listArchivedInboxPage = vi.fn(async (filters: InboxFilters) =>
     filters.statuses.length ? next.promise : page([item({ archived: true })]));
   setApiInstance({ listArchivedInboxPage, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);

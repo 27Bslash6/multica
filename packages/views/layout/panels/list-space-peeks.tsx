@@ -34,9 +34,7 @@ const EMPTY_AGENTS: Agent[] = [];
  * the same saved filters. Opening a row lands on it in the Inbox.
  *
  * It reads the Inbox page's own active pages, so the server applies the
- * filters, the idle dimension included, and the two share one cache. The peek
- * shows only while the page is closed, so it re-reads the idle pages on agent
- * activity itself.
+ * filters, the idle dimension included, and the two share one cache.
  */
 export function InboxPeek() {
   const { t } = useT("inbox");
