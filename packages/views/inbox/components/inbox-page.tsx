@@ -394,9 +394,14 @@ export function InboxPage() {
   // A pinned row leaves its view's server pages on the next read. Seeding its
   // lookup with the row on screen keeps it listed and its detail mounted
   // through that read, and lets cache patches, rollback and deletion apply to
-  // it too.
+  // it too. Writing data clears an invalidation the lookup was holding, so it
+  // is put back without a refetch, as `patchInboxLists` does: the row the page
+  // drops is then re-read, not kept as it was before the event.
   const seedSelectionLookup = useCallback((row: InboxItem) => {
-    queryClient.setQueryData(lookupOptions.queryKey, { items: [row], hasMore: false, nextCursor: null });
+    const { queryKey } = lookupOptions;
+    const invalidated = queryClient.getQueryState(queryKey)?.isInvalidated === true;
+    queryClient.setQueryData(queryKey, { items: [row], hasMore: false, nextCursor: null });
+    if (invalidated) void queryClient.invalidateQueries({ queryKey, exact: true, refetchType: "none" });
   }, [lookupOptions, queryClient]);
   useEffect(() => {
     if (!selectedId || selectedRead) return;

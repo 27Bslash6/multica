@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
 import { EMPTY_INBOX_FILTERS, useInboxFilterStore, type InboxFilters } from "@multica/core/inbox/filter-store";
-import { archivedInboxLookupOptions, inboxKeys, inboxPagesOptions } from "@multica/core/inbox/queries";
+import { archivedInboxLookupOptions, inboxKeys, inboxLookupOptions, inboxPagesOptions } from "@multica/core/inbox/queries";
 import { onInboxInvalidate, onInboxIssueDeleted, patchInboxIssueProjection } from "@multica/core/inbox/ws-updaters";
 import type { ArchivedInboxPage as InboxPageData } from "@multica/core/types/inbox";
 import type { AgentTask, InboxItem } from "@multica/core/types";
@@ -700,4 +700,24 @@ it("shows the load error and no pending selection when a deep link's first page 
   expect(screen.queryByRole("status")).toBeNull();
   expect(listInboxPage.mock.calls.some(([, options]) => options?.groupId)).toBe(false);
   expect(replace).not.toHaveBeenCalled();
+});
+
+it("keeps an inbox event's invalidation on the open row's lookup when the idle seed rewrites it", async () => {
+  // Writing the seed would otherwise mark the lookup fresh, and the row the idle
+  // page drops next would keep its fields from before the event.
+  useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
+  useInboxFilterStore.getState().toggleIdleOnly("workspace-1");
+  const rows = [item({ read: true })];
+  idleServer(rows, new Set());
+  renderPage();
+  fireEvent.click(await screen.findByText("inbox-a"));
+  await screen.findByTestId("detail");
+  const lookupKey = inboxLookupOptions("workspace-1", "issue-a").queryKey;
+  await waitFor(() => expect(qc.getQueryData(lookupKey)?.items[0]?.title).toBe("Issue title"));
+
+  rows[0] = { ...rows[0]!, title: "Renamed" };
+  await act(async () => { await onInboxInvalidate(qc, "workspace-1"); });
+
+  await waitFor(() => expect(qc.getQueryData(lookupKey)?.items[0]?.title).toBe("Renamed"));
+  expect(qc.getQueryState(lookupKey)?.isInvalidated).toBe(true);
 });
