@@ -296,12 +296,12 @@ describe("InboxFilterMenu", () => {
     );
   });
 
-  it("offers the idle filter in the active view with the server's count of idle groups", async () => {
+  it("toggles no agents working without a count beside it", async () => {
     const getInboxFacets = vi.fn(async () => ({ ...ITEM_FACETS, idleCount: 7 }));
     renderMenu({ getInboxFacets });
 
     fireEvent.click(screen.getByRole("button", { name: "Filter inbox" }));
-    const idle = await screen.findByRole("menuitemcheckbox", { name: /No agents working.*7/ });
+    const idle = await screen.findByRole("menuitemcheckbox", { name: /^No agents working$/ });
     expect(idle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(idle);
 

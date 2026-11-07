@@ -116,7 +116,6 @@ export function InboxFilterMenu({
   // ignoring its own, so each number says how many rows selecting that value
   // can actually reveal.
   const unreadCount = facets?.unreadCount ?? 0;
-  const idleCount = facets?.idleCount ?? 0;
   const statuses = new Map(Object.entries(facets?.statuses ?? {}));
   const priorities = new Map(Object.entries(facets?.priorities ?? {}));
   const actors = new Map(Object.entries(facets?.actors ?? {}));
@@ -186,11 +185,6 @@ export function InboxFilterMenu({
           >
             <BotOff className="size-3.5" />
             <span className="flex-1">{t(($) => $.filters.no_agents_working)}</span>
-            {idleCount > 0 && (
-              <span className="text-caption text-muted-foreground">
-                {t(($) => $.filters.notification_count, { count: idleCount })}
-              </span>
-            )}
           </DropdownMenuCheckboxItem>
         )}
         <DropdownMenuSeparator />

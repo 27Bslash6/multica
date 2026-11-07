@@ -14,9 +14,6 @@ import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { InboxPage } from "./inbox-page";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-vi.mock("react-resizable-panels", () => ({
-  useDefaultLayout: () => ({ defaultLayout: undefined, onLayoutChanged: vi.fn() }),
-}));
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "workspace-1" }));
 vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({
@@ -43,11 +40,6 @@ vi.mock("../../navigation", () => ({
   useReportNavigating: () => {},
 }));
 vi.mock("@multica/ui/hooks/use-mobile", () => ({ useIsCompact: () => false }));
-vi.mock("@multica/ui/components/ui/resizable", () => ({
-  ResizablePanelGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  ResizablePanel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  ResizableHandle: () => null,
-}));
 vi.mock("./inbox-list", () => ({
   InboxList: ({ items, onSelect }: { items: InboxItem[]; onSelect: (item: InboxItem) => void }) => (
     <div>{items.map((row) => (
@@ -55,7 +47,13 @@ vi.mock("./inbox-list", () => ({
     ))}</div>
   ),
 }));
-vi.mock("./inbox-filter-menu", () => ({ InboxFilterMenu: () => null }));
+const filterMenuUnmounted = vi.hoisted(() => vi.fn());
+vi.mock("./inbox-filter-menu", () => ({
+  InboxFilterMenu: () => {
+    useEffect(() => () => filterMenuUnmounted(), []);
+    return <div data-testid="filter-menu" />;
+  },
+}));
 vi.mock("./inbox-list-item", () => ({ useTimeAgo: () => vi.fn() }));
 let rowActions: { onAction: (id: string) => void; onMarkRead: (id: string) => void };
 vi.mock("./inbox-context-menu", () => ({
@@ -90,6 +88,7 @@ beforeEach(() => {
   searchParams = new URLSearchParams();
   replace.mockClear();
   detailUnmounted.mockClear();
+  filterMenuUnmounted.mockClear();
   useInboxFilterStore.setState({ filtersByWorkspace: {} });
   useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
 });
@@ -106,6 +105,33 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const page = (items: InboxItem[]): InboxPageData => ({ items, hasMore: false, nextCursor: null });
+
+it.each([false, true])("clears an older unread assignment when opening a read row via URL=%s", async (viaUrl) => {
+  useInboxFilterStore.setState({ filtersByWorkspace: {} });
+  if (viaUrl) searchParams.set("issue", "issue-a");
+  let rows = [
+    item({ id: "comment", read: true, created_at: "2026-06-15T08:01:00Z" }),
+    item({ id: "assigned", type: "issue_assigned", severity: "action_required" }),
+  ];
+  // The server lists a group by its newest row, so the read comment is all
+  // the client sees of the issue: the unread assignment stays on the server.
+  const listInboxPage = vi.fn(async (_filters: InboxFilters, _options: { groupId?: string }) => page(rows.slice(0, 1)));
+  const pageReads = () => listInboxPage.mock.calls.filter(([, options]) => !options.groupId).length;
+  const markInboxRead = vi.fn(async () => {
+    rows = rows.map((row) => ({ ...row, read: true }));
+    return rows[0]!;
+  });
+  setApiInstance({ listInboxPage, markInboxRead, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+
+  renderPage();
+  const row = await screen.findByText("comment");
+  if (!viaUrl) fireEvent.click(row);
+
+  expect(await screen.findByTestId("detail")).toHaveTextContent("issue-a");
+  await waitFor(() => expect(markInboxRead).toHaveBeenCalledExactlyOnceWith("comment"));
+  await waitFor(() => expect(pageReads()).toBe(2));
+  expect(rows.every((r) => r.read)).toBe(true);
+});
 
 function archivedFixture() {
   searchParams = new URLSearchParams("view=archived");
@@ -216,8 +242,8 @@ it.each([true, false])("tries a failing mark-read once while the row stays open,
 });
 
 it("tries a failed mark-read once more when the row is opened again", async () => {
-  // Opening a row that is already read writes nothing, so only leaving the
-  // failed row can release it for the next open.
+  // Leaving the failed row releases it for the next open. Opening the read row
+  // in between writes once too: an older notification can be unread under it.
   useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
   const { markReads, failWrites, quiet } = failingReadFixture([
     item(), item({ id: "inbox-b", issue_id: "issue-b", read: true }),
@@ -236,7 +262,7 @@ it("tries a failed mark-read once more when the row is opened again", async () =
   await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
   await quiet();
   expect(markReads("inbox-a")).toBe(2);
-  expect(markReads("inbox-b")).toBe(0);
+  expect(markReads("inbox-b")).toBe(1);
 });
 
 it("marks the open row read again when it turns unread after an explicit read succeeded", async () => {
@@ -380,7 +406,8 @@ function idleServer(rows: InboxItem[], busy: Set<string>) {
     return page(matching.slice(0, 2));
   });
   const tasks = () => [...busy].map((issueId) => ({ id: `task-${issueId}`, agent_id: "agent-1", issue_id: issueId, status: "running" }) as AgentTask);
-  setApiInstance({ listInboxPage, getAgentTaskSnapshot: async () => tasks(), getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+  const markInboxRead = async (id: string) => ({ ...rows.find((row) => row.id === id)!, read: true });
+  setApiInstance({ listInboxPage, markInboxRead, getAgentTaskSnapshot: async () => tasks(), getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
   qc.setQueryData(agentTaskSnapshotOptions("workspace-1").queryKey, tasks());
   return {
     pageReads: () => listInboxPage.mock.calls.filter((call) => !call[1].groupId).length,
@@ -502,15 +529,21 @@ it("replaces a busy pinned row from its lookup without duplication or detail unm
   qc.setQueryData(snapshotKey, []);
   const listInboxPage = vi.fn(async (filters: InboxFilters, options: { groupId?: string }) =>
     page(rows.filter((row) => options.groupId ? row.issue_id === options.groupId : !filters.idleOnly || !busy)));
-  setApiInstance({ listInboxPage, getAgentTaskSnapshot: async () => [], getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+  const markInboxRead = vi.fn(async (id: string) => rows.find((row) => row.id === id)!);
+  setApiInstance({ listInboxPage, markInboxRead, getAgentTaskSnapshot: async () => [], getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+  const pageReads = () => listInboxPage.mock.calls.filter(([_, options]) => !options.groupId).length;
   renderPage();
   fireEvent.click(await screen.findByText("inbox-a"));
   const detail = await screen.findByTestId("detail");
+  // Opening reads the row once; the re-reads that write starts settle first.
+  await waitFor(() => expect(markInboxRead).toHaveBeenCalledOnce());
+  await act(() => new Promise<void>((resolve) => { setTimeout(resolve, 100); }));
+  const readsBefore = pageReads();
   await act(async () => {
     busy = true;
     qc.setQueryData(snapshotKey, [{ id: "task-a", agent_id: "agent-1", issue_id: "issue-a", status: "running" } as AgentTask]);
   });
-  await waitFor(() => expect(listInboxPage.mock.calls.filter(([_, options]) => !options.groupId)).toHaveLength(2));
+  await waitFor(() => expect(pageReads()).toBe(readsBefore + 1));
   expect(screen.getAllByText("inbox-a")).toHaveLength(1);
   rows = [item({ id: "inbox-a-new", read: true, created_at: "2026-06-15T09:00:00Z" })];
   await act(async () => { await onInboxInvalidate(qc, "workspace-1"); });
@@ -627,7 +660,8 @@ it("keeps the detail of an idle row opened on a return visit when an agent start
     if (options.groupId) return page(rows.filter((row) => row.issue_id === options.groupId));
     return !busy ? mountReread.promise : page(rows);
   });
-  setApiInstance({ listInboxPage, getAgentTaskSnapshot: async () => [], getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+  const markInboxRead = async (id: string) => [a, b].find((row) => row.id === id)!;
+  setApiInstance({ listInboxPage, markInboxRead, getAgentTaskSnapshot: async () => [], getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
   renderPage();
   await waitFor(() => expect(listInboxPage).toHaveBeenCalledOnce());
   fireEvent.click(screen.getByText("inbox-a"));
@@ -698,4 +732,23 @@ it("keeps an inbox event's invalidation on the open row's lookup when the idle s
 
   await waitFor(() => expect(qc.getQueryData(lookupKey)?.items[0]?.title).toBe("Renamed"));
   expect(qc.getQueryState(lookupKey)?.isInvalidated).toBe(true);
+});
+
+it("keeps the archived list and its filter menu mounted while a new filter loads", async () => {
+  searchParams = new URLSearchParams("view=archived");
+  const next = deferred<InboxPageData>();
+  const listArchivedInboxPage = vi.fn(async (filters: InboxFilters) =>
+    filters.statuses.length ? next.promise : page([item({ archived: true })]));
+  setApiInstance({ listArchivedInboxPage, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+  renderPage();
+  await screen.findByText("inbox-a");
+  const menu = screen.getByTestId("filter-menu");
+  act(() => useInboxFilterStore.getState().toggleStatusFilter("workspace-1", "todo"));
+  await waitFor(() => expect(listArchivedInboxPage).toHaveBeenCalledTimes(2));
+  expect(screen.getByTestId("filter-menu")).toBe(menu);
+  expect(screen.getByText("inbox-a")).toBeInTheDocument();
+  act(() => useInboxFilterStore.getState().toggleStatusFilter("workspace-1", "in_progress"));
+  await act(async () => next.resolve(page([item({ archived: true })])));
+  expect(screen.getByTestId("filter-menu")).toBe(menu);
+  expect(filterMenuUnmounted).not.toHaveBeenCalled();
 });

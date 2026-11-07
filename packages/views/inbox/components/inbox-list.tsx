@@ -3,14 +3,13 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import { Archive, ChevronRight, Inbox } from "@multica/ui/icons";
+import { Inbox } from "@multica/ui/icons";
 import { isEditableShortcutTarget } from "@multica/core/shortcuts";
 import { isImeComposing } from "@multica/core/utils";
 import type { InboxItem } from "@multica/core/types";
@@ -56,9 +55,9 @@ export function InboxList({
   loadMoreError = false,
   onSelect,
   onAction,
-  onOpenArchived,
   emptyLabel,
   emptyAction,
+  scrollRestoration = true,
 }: {
   items: InboxItem[];
   view: InboxView;
@@ -68,9 +67,13 @@ export function InboxList({
   loadMoreError?: boolean;
   onSelect: (item: InboxItem) => void;
   onAction: (id: string) => void;
-  onOpenArchived: () => void;
   emptyLabel?: string;
   emptyAction?: ReactNode;
+  /**
+   * Off for a preview rendered over another route, which must neither read
+   * nor be captured as that route's `list` scroll offset.
+   */
+  scrollRestoration?: boolean;
 }) {
   const { t } = useT("inbox");
   // Virtuoso's `customScrollParent` wants the actual HTMLElement, not a ref.
@@ -81,14 +84,15 @@ export function InboxList({
   // ref-attach (the seed's estimate spacer gives the container a truthful
   // height on the first commit, so the assignment sticks pre-paint) and feed
   // the same offset into the Virtuoso as its initial position.
-  const restoredScrollTop = useRestoredScrollOffset("list");
+  const savedScrollTop = useRestoredScrollOffset("list");
   const restoreScrollRef = useRestoredScrollRef("list");
+  const restoredScrollTop = scrollRestoration ? savedScrollTop : undefined;
   const attachScrollEl = useCallback(
     (el: HTMLDivElement | null) => {
       setScrollEl(el);
-      restoreScrollRef(el);
+      if (scrollRestoration) restoreScrollRef(el);
     },
-    [restoreScrollRef],
+    [restoreScrollRef, scrollRestoration],
   );
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const isArchivedView = view === "archived";
@@ -154,31 +158,6 @@ export function InboxList({
     onSelect(nextItem);
   };
 
-  // The entry into the archive sits below the last row and scrolls with the
-  // list (same placement as chat's). Virtuoso mounts it via `components.Footer`,
-  // and swaps the component whenever that prop's identity changes — so both the
-  // element and the Footer wrapping it are memoized. Without that the entry
-  // remounts on every parent render and drops hover/focus mid-click.
-  const archivedEntry = useMemo(
-    () =>
-      !isArchivedView ? (
-        <button
-          type="button"
-          onClick={onOpenArchived}
-          className="mt-1 flex h-10 w-full items-center gap-2 rounded-md px-2 text-left text-caption text-muted-foreground outline-none transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <span className="flex size-7 shrink-0 items-center justify-center">
-            <Archive className="size-4" />
-          </span>
-          <span className="min-w-0 flex-1 truncate font-medium">
-            {t(($) => $.list.archived_title)}
-          </span>
-          <ChevronRight className="size-4 shrink-0 text-faint-foreground" />
-        </button>
-      ) : null,
-    [isArchivedView, onOpenArchived, t],
-  );
-
   const loadMore = useCallback(() => {
     if (!loadingMore && !loadMoreError) onLoadMore?.();
   }, [loadingMore, loadMoreError, onLoadMore]);
@@ -186,7 +165,9 @@ export function InboxList({
     if (items.length === 0) loadMore();
   }, [items.length, loadMore]);
   // More pages load as the end scrolls into view; the button covers retry and
-  // keyboard use. It sits right below the rows, above the archive entry.
+  // keyboard use.
+  // Virtuoso remounts `components.Footer` whenever its identity changes, so
+  // it is memoized to keep the load-more button's focus across renders.
   const Footer = useCallback(() => <>
     {onLoadMore && (
       <div className="flex flex-col items-center gap-2 py-3">
@@ -201,8 +182,7 @@ export function InboxList({
         </button>
       </div>
     )}
-    {archivedEntry}
-  </>, [archivedEntry, isArchivedView, onLoadMore, loadingMore, loadMoreError, t]);
+  </>, [isArchivedView, onLoadMore, loadingMore, loadMoreError, t]);
 
   if (items.length === 0) {
     return (
@@ -217,8 +197,6 @@ export function InboxList({
           </p>
           {emptyAction && <div className="mt-3">{emptyAction}</div>}
         </div>}
-        {/* Still offer the archive when the main list is empty — that is
-            exactly when a user goes looking for what they filed away. */}
         <div className="px-2"><Footer /></div>
       </div>
     );
@@ -242,7 +220,7 @@ export function InboxList({
   return (
     <div
       ref={attachScrollEl}
-      data-tab-scroll-root="list"
+      data-tab-scroll-root={scrollRestoration ? "list" : undefined}
       // Programmatically focusable only: the rows already carry their own tab
       // stops, so a tabbable container would just add a redundant one.
       tabIndex={-1}
@@ -265,18 +243,12 @@ export function InboxList({
             components={{ Footer }}
           />
         ) : (
-          <>
-            <VirtuosoSeed
-              data={items}
-              itemContent={itemContent}
-              computeItemKey={computeItemKey}
-              estimatedItemHeight={INBOX_ROW_ESTIMATED_HEIGHT}
-            />
-            {/* The seed frame renders a bounded slice, so the entry would be
-                mid-list rather than after the last row — only show it once the
-                seed IS the whole list. */}
-            {items.length <= VIRTUOSO_SEED_COUNT && archivedEntry}
-          </>
+          <VirtuosoSeed
+            data={items}
+            itemContent={itemContent}
+            computeItemKey={computeItemKey}
+            estimatedItemHeight={INBOX_ROW_ESTIMATED_HEIGHT}
+          />
         )}
       </div>
     </div>
