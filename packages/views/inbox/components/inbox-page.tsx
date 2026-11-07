@@ -42,17 +42,20 @@ import {
   useArchiveCompletedInbox,
   useRetrySourceContextQuickCreate,
 } from "@multica/core/inbox/mutations";
-import { onInboxIdleChange } from "@multica/core/inbox/ws-updaters";
+import { syncInboxBusyIssues } from "@multica/core/inbox/ws-updaters";
+import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import {
   filterInboxItems,
+  EMPTY_INBOX_FILTERS,
   inboxFiltersForArchive,
   inboxFilterCount,
   useInboxFilters,
   useInboxFilterStore,
+  type InboxFilters,
 } from "@multica/core/inbox/filter-store";
 
 import { IssueDetail, issueHighlightMementoKey } from "../../issues/components/issue-detail";
-import { useIssueSurfaceActivity } from "../../issues/surface/activity";
+import { deriveIssueSurfaceActivity } from "../../issues/surface/activity";
 import { ActionShortcutKeycaps } from "../../common/shortcut-keycaps";
 import { useRegisterCommandBarContext } from "../../search/register-context";
 import { IssuePeekHost } from "../../issues/components/issue-peek";
@@ -111,6 +114,8 @@ import {
 import { AutopilotQuotaNotice } from "./autopilot-quota-notice";
 import { useT } from "../../i18n";
 import { useIssueLimitUpgradePrompt } from "../../modals/use-issue-limit-upgrade-prompt";
+
+const IDLE_LOOKUP_FILTERS: InboxFilters = { ...EMPTY_INBOX_FILTERS, idleOnly: true };
 
 const INBOX_LIST_DEFAULT_SIZE = 260;
 const INBOX_LIST_MIN_SIZE = 240;
@@ -187,12 +192,6 @@ export function InboxPage() {
     () => (isArchivedView ? inboxFiltersForArchive(filters) : filters),
     [filters, isArchivedView],
   );
-  // "Active" is the same running-or-queued rule the row's activity badge uses.
-  const { activityByIssueId } = useIssueSurfaceActivity();
-  const activeIssueIds = useMemo(() => new Set(activityByIssueId.keys()), [activityByIssueId]);
-  // Only an idle selection reads the snapshot, so task churn leaves the list
-  // alone while it is off.
-  const idleFilterIssueIds = effectiveFilters.idleOnly ? activeIssueIds : undefined;
   // The open row survives the unread and idle dimensions while it stays
   // selected; see the pin refs above. Each pin is passed separately so it
   // only crosses its own dimension.
@@ -205,13 +204,15 @@ export function InboxPage() {
       ? selectedKey
       : null;
   const pinnedKey = pinnedUnreadKey ?? pinnedIdleKey;
+  // No task snapshot here: only the server decides which groups are idle. A
+  // snapshot read across a task event can be stale, and judging rows by it
+  // would hide a row the server just listed as idle.
   const filterContext = useMemo(
-    () => ({ activeIssueIds: idleFilterIssueIds, pinnedUnreadKey, pinnedIdleKey }),
-    [idleFilterIssueIds, pinnedUnreadKey, pinnedIdleKey],
+    () => ({ pinnedUnreadKey, pinnedIdleKey }),
+    [pinnedUnreadKey, pinnedIdleKey],
   );
   // Re-applied locally so an optimistic patch (a row read under "unread
-  // only", an issue moved out of a status) leaves the list at once, and so an
-  // issue an agent starts on leaves it before the server re-read below.
+  // only", an issue moved out of a status) leaves the list at once.
   const filteredItems = useMemo(
     () => filterInboxItems(viewItems, effectiveFilters, filterContext),
     [viewItems, effectiveFilters, filterContext],
@@ -220,8 +221,13 @@ export function InboxPage() {
   const selectedOnPage = viewItems.find((i) => (i.issue_id ?? i.id) === selectedKey);
   // A deep link can point beyond every loaded page. Resolve its group directly
   // without adding it to the cursor chain or mistaking a page miss for a 404.
+  // Under the idle filter the lookup asks the server for an idle group, like
+  // the pages; only the pinned open row is read unfiltered, so it stays after
+  // an agent starts on its issue.
   const lookup = useQuery({
-    ...(isArchivedView ? archivedInboxLookupOptions(wsId, selectedKey) : inboxLookupOptions(wsId, selectedKey)),
+    ...(isArchivedView
+      ? archivedInboxLookupOptions(wsId, selectedKey)
+      : inboxLookupOptions(wsId, selectedKey, effectiveFilters.idleOnly && !pinnedIdleKey ? IDLE_LOOKUP_FILTERS : EMPTY_INBOX_FILTERS)),
     enabled: !!selectedKey && !selectedOnPage && !viewQuery.isLoading && !viewError,
   });
   const lookupItems = useMemo(() => (isArchivedView ? deduplicateArchivedInboxItems : deduplicateInboxItems)(
@@ -441,14 +447,17 @@ export function InboxPage() {
     }
   }, [selectedId, selectedKey]);
 
-  // `selected` only exists once the open row passed every filter, so under
-  // the idle filter this pins a row that was idle when the user opened it.
+  // `selected` only exists once the open row passed every filter, and the
+  // server lists a row under the idle filter only while its issue is idle, so
+  // this pins a row that was idle when the user opened it. Rows still shown
+  // from the previous selection's pages while the idle one loads prove nothing.
   const idleOnlyActive = effectiveFilters.idleOnly;
+  const idleRowsFromServer = idleOnlyActive && !activeQuery.isPlaceholderData;
   useEffect(() => {
-    if (!idleOnlyActive || !selected || pinnedIdleKeyRef.current === selectedKey) return;
+    if (!idleRowsFromServer || !selected || pinnedIdleKeyRef.current === selectedKey) return;
     pinnedIdleKeyRef.current = selectedKey;
     seedSelectionLookup(selected);
-  }, [idleOnlyActive, selected, selectedKey, seedSelectionLookup]);
+  }, [idleRowsFromServer, selected, selectedKey, seedSelectionLookup]);
 
   // Turning a filter off releases its pin, so turning it back on judges the
   // open row by its current state instead of an exemption from earlier.
@@ -460,17 +469,17 @@ export function InboxPage() {
     if (!unreadOnlyActive) pinnedUnreadKeyRef.current = null;
   }, [unreadOnlyActive]);
 
-  // The server decides which groups are idle, so only a re-read lists a row
-  // whose issue went idle. Re-read when the set of busy issues changes, not on
-  // every task event: a task moving from queued to running changes nothing the
-  // idle dimension reads.
-  const busyIssues = useMemo(() => [...activeIssueIds].sort().join(","), [activeIssueIds]);
-  const seenBusyIssuesRef = useRef({ wsId, busyIssues });
+  // The task snapshot only says when to ask the server again: when the issues
+  // an agent is running or queued on (the activity badge's rule) differ from
+  // those the idle caches were read under. See `syncInboxBusyIssues`.
+  const { data: taskSnapshot, dataUpdatedAt: taskSnapshotAt } = useQuery(agentTaskSnapshotOptions(wsId));
+  const busyIssueIds = useMemo(
+    () => taskSnapshot && [...deriveIssueSurfaceActivity(taskSnapshot).activityByIssueId.keys()],
+    [taskSnapshot],
+  );
   useEffect(() => {
-    const seen = seenBusyIssuesRef.current;
-    seenBusyIssuesRef.current = { wsId, busyIssues };
-    if (seen.wsId === wsId && seen.busyIssues !== busyIssues) void onInboxIdleChange(queryClient, wsId);
-  }, [busyIssues, queryClient, wsId]);
+    if (busyIssueIds) void syncInboxBusyIssues(queryClient, wsId, busyIssueIds, taskSnapshotAt);
+  }, [busyIssueIds, taskSnapshotAt, queryClient, wsId]);
 
   const writeViewState = useViewStateWriter();
   // Bumped when the already-open notification row is re-clicked; threaded to
