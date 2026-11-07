@@ -1,12 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { BotOff, CircleDot, Filter, Mail, RotateCcw, SignalHigh, UserRound } from "@multica/ui/icons";
 import { PRIORITY_DISPLAY_ORDER } from "@multica/core/issues/config";
 import {
   inboxActorKeyParts,
   inboxFiltersForArchive,
+  inboxFiltersForPrioritySupport,
   inboxFilterCount,
+  type InboxPriorityFilterSupport,
   useInboxFilters,
   useInboxFilterStore,
 } from "@multica/core/inbox/filter-store";
@@ -41,10 +43,12 @@ import { useT } from "../../i18n";
 export function InboxFilterMenu({
   wsId,
   items,
+  priorityFilterSupport,
   archived = false,
 }: {
   wsId: string;
   items: InboxItem[];
+  priorityFilterSupport: InboxPriorityFilterSupport;
   archived?: boolean;
 }) {
   const { t } = useT("inbox");
@@ -67,6 +71,9 @@ export function InboxFilterMenu({
   const toggleIdleOnly = useInboxFilterStore((state) => state.toggleIdleOnly);
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
   const clearFilters = useInboxFilterStore((state) => state.clearFilters);
+  const clearPriorityFilters = useInboxFilterStore(
+    (state) => state.clearPriorityFilters,
+  );
   const inboxStatusKeys = useMemo(
     () => [
       ...new Set([
@@ -80,12 +87,30 @@ export function InboxFilterMenu({
     [items, facets, filters.statuses],
   );
   const statusOptions = useStatusOptions(wsId, inboxStatusKeys);
-  // An idle selection kept from the active view stays dormant in the archive.
-  const effectiveFilters = useMemo(
-    () => (archived ? inboxFiltersForArchive(filters) : filters),
-    [filters, archived],
-  );
+  const effectiveFilters = useMemo(() => {
+    const supported = inboxFiltersForPrioritySupport(filters, priorityFilterSupport);
+    return archived ? inboxFiltersForArchive(supported) : supported;
+  }, [filters, priorityFilterSupport, archived]);
   const activeCount = inboxFilterCount(effectiveFilters);
+  const priorityFilteringSupported = priorityFilterSupport === "supported";
+
+  // A workspace can retain filters while its backend changes (Desktop server
+  // switch, self-hosted downgrade, or rolling deployment). Remove a priority
+  // selection only once incompatibility is confirmed; "unknown" simply keeps
+  // it dormant while an empty list gives us no capability evidence.
+  useEffect(() => {
+    if (
+      priorityFilterSupport === "unsupported" &&
+      filters.priorities.length > 0
+    ) {
+      clearPriorityFilters(wsId);
+    }
+  }, [
+    clearPriorityFilters,
+    filters.priorities.length,
+    priorityFilterSupport,
+    wsId,
+  ]);
 
   // Counts are faceted: every count respects the other active dimensions while
   // ignoring its own, so each number says how many rows selecting that value
@@ -252,40 +277,42 @@ export function InboxFilterMenu({
           </DropdownMenuSubContent>
         </DropdownMenuSub>
 
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <SignalHigh className="size-3.5" />
-            <span className="flex-1">{t(($) => $.filters.priority)}</span>
-            {effectiveFilters.priorities.length > 0 ? (
-              <span className="text-caption font-medium text-primary">
-                {effectiveFilters.priorities.length}
-              </span>
-            ) : null}
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-auto min-w-44">
-            {PRIORITY_DISPLAY_ORDER.map((priority) => {
-              const checked = effectiveFilters.priorities.includes(priority);
-              const count = priorities.get(priority) ?? 0;
-              return (
-                <DropdownMenuCheckboxItem
-                  key={priority}
-                  checked={checked}
-                  onCheckedChange={() => togglePriority(wsId, priority)}
-                >
-                  <PriorityIcon priority={priority} />
-                  <span className="flex-1">
-                    {tIssues(($) => $.priority[priority])}
-                  </span>
-                  {count > 0 ? (
-                    <span className="text-caption text-muted-foreground">
-                      {t(($) => $.filters.notification_count, { count })}
+        {priorityFilteringSupported ? (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <SignalHigh className="size-3.5" />
+              <span className="flex-1">{t(($) => $.filters.priority)}</span>
+              {effectiveFilters.priorities.length > 0 ? (
+                <span className="text-caption font-medium text-primary">
+                  {effectiveFilters.priorities.length}
+                </span>
+              ) : null}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-auto min-w-44">
+              {PRIORITY_DISPLAY_ORDER.map((priority) => {
+                const checked = effectiveFilters.priorities.includes(priority);
+                const count = priorities.get(priority) ?? 0;
+                return (
+                  <DropdownMenuCheckboxItem
+                    key={priority}
+                    checked={checked}
+                    onCheckedChange={() => togglePriority(wsId, priority)}
+                  >
+                    <PriorityIcon priority={priority} />
+                    <span className="flex-1">
+                      {tIssues(($) => $.priority[priority])}
                     </span>
-                  ) : null}
-                </DropdownMenuCheckboxItem>
-              );
-            })}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
+                    {count > 0 ? (
+                      <span className="text-caption text-muted-foreground">
+                        {t(($) => $.filters.notification_count, { count })}
+                      </span>
+                    ) : null}
+                  </DropdownMenuCheckboxItem>
+                );
+              })}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : null}
 
         {activeCount > 0 && (
           <>

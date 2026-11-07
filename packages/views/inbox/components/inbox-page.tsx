@@ -690,6 +690,7 @@ export function InboxPage() {
       <InboxFilterMenu
         wsId={wsId}
         items={viewItems}
+        priorityFilterSupport="supported"
         archived={isArchivedView}
       />
       {/* Batch actions are main-view only. Every entry archives from the MAIN

@@ -3,20 +3,14 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider, type InfiniteData } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
-import type { InboxItem, ArchivedInboxPage, InboxWorkspaceUnread } from "../types";
-import { EMPTY_INBOX_FILTERS } from "./filter-store";
+import type { InboxItem, InboxWorkspaceUnread } from "../types";
 import { useMarkInboxRead, useMarkInboxUnread, useUnarchiveInbox } from "./mutations";
-import {
-  archivedInboxPagesOptions,
-  inboxKeys,
-  inboxPagesOptions,
-  useInboxUnreadCount,
-} from "./queries";
+import { inboxKeys, useInboxUnreadCount } from "./queries";
 import { onInboxSummaryInvalidate } from "./ws-updaters";
 import { createQueryClient } from "../query-client";
 
@@ -56,33 +50,12 @@ function createWrapper(queryClient: QueryClient) {
   };
 }
 
-const LIST_KEY = inboxPagesOptions(WORKSPACE_ID, EMPTY_INBOX_FILTERS).queryKey;
-const ARCHIVED_KEY = archivedInboxPagesOptions(
-  WORKSPACE_ID,
-  EMPTY_INBOX_FILTERS,
-).queryKey;
-
-function pages(items: InboxItem[]): InfiniteData<ArchivedInboxPage> {
-  return {
-    pages: [{ items, nextCursor: null, hasMore: false }],
-    pageParams: [null],
-  };
-}
-
-function seedList(qc: QueryClient, items: InboxItem[]) {
-  qc.setQueryData(LIST_KEY, pages(items));
-}
-
-function seedArchived(qc: QueryClient, items: InboxItem[]) {
-  qc.setQueryData(ARCHIVED_KEY, pages(items));
-}
-
 function archivedCache(qc: QueryClient) {
-  return qc.getQueryData(ARCHIVED_KEY)?.pages.flatMap((p) => p.items) ?? [];
+  return qc.getQueryData<InboxItem[]>(inboxKeys.archived(WORKSPACE_ID)) ?? [];
 }
 
 function listCache(qc: QueryClient) {
-  return qc.getQueryData(LIST_KEY)?.pages.flatMap((p) => p.items) ?? [];
+  return qc.getQueryData<InboxItem[]>(inboxKeys.list(WORKSPACE_ID)) ?? [];
 }
 
 function summaryCount(qc: QueryClient) {
@@ -108,11 +81,13 @@ describe("useMarkInboxUnread", () => {
     // Item-level, mirroring mark-read: the list shows one row per issue
     // carrying that group's newest item, so flipping siblings would resurrect
     // notifications the user already dealt with without changing the row.
-    seedList(queryClient, [
+    queryClient.setQueryData<InboxItem[]>(inboxKeys.list(WORKSPACE_ID), [
       item({ id: "inbox-1", read: true, archived: false }),
       item({ id: "sibling", issue_id: "issue-1", read: true, archived: false }),
     ]);
-    seedArchived(queryClient, [item({ id: "inbox-1", read: true })]);
+    queryClient.setQueryData<InboxItem[]>(inboxKeys.archived(WORKSPACE_ID), [
+      item({ id: "inbox-1", read: true }),
+    ]);
 
     const { result } = renderHook(() => useMarkInboxUnread(), {
       wrapper: createWrapper(queryClient),
@@ -131,7 +106,9 @@ describe("useMarkInboxUnread", () => {
   });
 
   it("refreshes the cross-workspace summary so the switcher dot lights again", async () => {
-    seedList(queryClient, [item({ id: "inbox-1", read: true, archived: false })]);
+    queryClient.setQueryData<InboxItem[]>(inboxKeys.list(WORKSPACE_ID), [
+      item({ id: "inbox-1", read: true, archived: false }),
+    ]);
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
 
     const { result } = renderHook(() => useMarkInboxUnread(), {
@@ -149,8 +126,8 @@ describe("useMarkInboxUnread", () => {
     markInboxUnread.mockRejectedValue(new Error("boom"));
     const active = [item({ id: "inbox-1", read: true, archived: false })];
     const archived = [item({ id: "inbox-1", read: true })];
-    seedList(queryClient, active);
-    seedArchived(queryClient, archived);
+    queryClient.setQueryData<InboxItem[]>(inboxKeys.list(WORKSPACE_ID), active);
+    queryClient.setQueryData<InboxItem[]>(inboxKeys.archived(WORKSPACE_ID), archived);
 
     const { result } = renderHook(() => useMarkInboxUnread(), {
       wrapper: createWrapper(queryClient),
@@ -158,8 +135,8 @@ describe("useMarkInboxUnread", () => {
     result.current.mutate("inbox-1");
 
     await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(queryClient.getQueryData(LIST_KEY)).toEqual(pages(active));
-    expect(queryClient.getQueryData(ARCHIVED_KEY)).toEqual(pages(archived));
+    expect(listCache(queryClient)).toEqual(active);
+    expect(archivedCache(queryClient)).toEqual(archived);
   });
 });
 
@@ -178,7 +155,7 @@ describe("useUnarchiveInbox", () => {
   it("drops the whole issue group out of the archived list optimistically", async () => {
     // Archiving is issue-level, so restoring has to bring every sibling back —
     // leaving one behind would keep the issue in the archived list.
-    seedArchived(queryClient, [
+    queryClient.setQueryData<InboxItem[]>(inboxKeys.archived(WORKSPACE_ID), [
       item({ id: "sibling-a", issue_id: "issue-1" }),
       item({ id: "sibling-b", issue_id: "issue-1" }),
       item({ id: "other-issue", issue_id: "issue-2" }),
@@ -203,7 +180,9 @@ describe("useUnarchiveInbox", () => {
     // cross-workspace summary (the switcher dot). The server's half — that
     // UnarchiveInboxItem leaves `read` alone — is pinned by
     // TestUnarchiveInboxPreservesUnread in the Go suite.
-    seedArchived(queryClient, [item({ id: "inbox-1", read: false })]);
+    queryClient.setQueryData<InboxItem[]>(inboxKeys.archived(WORKSPACE_ID), [
+      item({ id: "inbox-1", read: false }),
+    ]);
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
 
     const { result } = renderHook(() => useUnarchiveInbox(), {
@@ -226,7 +205,10 @@ describe("useUnarchiveInbox", () => {
   it("rolls the archived list back when the request fails", async () => {
     unarchiveInbox.mockRejectedValue(new Error("boom"));
     const original = [item({ id: "inbox-1" })];
-    seedArchived(queryClient, original);
+    queryClient.setQueryData<InboxItem[]>(
+      inboxKeys.archived(WORKSPACE_ID),
+      original,
+    );
 
     const { result } = renderHook(() => useUnarchiveInbox(), {
       wrapper: createWrapper(queryClient),
@@ -234,7 +216,7 @@ describe("useUnarchiveInbox", () => {
     result.current.mutate("inbox-1");
 
     await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(queryClient.getQueryData(ARCHIVED_KEY)).toEqual(pages(original));
+    expect(archivedCache(queryClient)).toEqual(original);
   });
 });
 
@@ -261,7 +243,9 @@ describe("unread summary is server-owned", () => {
     setApiInstance({
       markInboxRead: vi.fn(async (id: string) => item({ id, read: true })),
     } as unknown as ApiClient);
-    seedList(queryClient, [item({ id: "inbox-1", read: false, archived: false })]);
+    queryClient.setQueryData<InboxItem[]>(inboxKeys.list(WORKSPACE_ID), [
+      item({ id: "inbox-1", read: false, archived: false }),
+    ]);
     queryClient.setQueryData<InboxWorkspaceUnread[]>(
       inboxKeys.unreadSummary(),
       [{ workspace_id: WORKSPACE_ID, count: 1 }],
@@ -303,7 +287,9 @@ describe("unread summary is server-owned", () => {
     "converges after a late summary response — %s",
     async (_label, cached) => {
       const qc = createQueryClient();
-      seedList(qc, [item({ id: "inbox-1", read: false, archived: false })]);
+      qc.setQueryData<InboxItem[]>(inboxKeys.list(WORKSPACE_ID), [
+        item({ id: "inbox-1", read: false, archived: false }),
+      ]);
       if (cached) {
         qc.setQueryData<InboxWorkspaceUnread[]>(inboxKeys.unreadSummary(), [
           { workspace_id: WORKSPACE_ID, count: 1 },

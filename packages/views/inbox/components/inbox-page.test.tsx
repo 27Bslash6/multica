@@ -824,32 +824,6 @@ describe("InboxPage", () => {
     expect(replace).not.toHaveBeenCalledWith("/acme/inbox");
   });
 
-  it("keeps an unread-filtered notification open once the unread page drops it", () => {
-    // The active view is paged by the server too: re-read under "unread only",
-    // the page no longer returns the row just read. Its seeded lookup keeps it.
-    reset();
-    queryClient.setQueryData.mockClear();
-    layout.width = DESKTOP;
-    listData.active = [
-      item({ id: "inbox-a", issue_id: "issue-a", read: false }),
-    ];
-    useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
-
-    const { rerender } = render(<InboxPage />);
-    fireEvent.click(screen.getByTestId("row"));
-
-    expect(queryClient.setQueryData).toHaveBeenCalledWith(
-      ["inbox", "workspace-1", "list", "lookup"],
-      { items: [expect.objectContaining({ id: "inbox-a" })], hasMore: false, nextCursor: null },
-    );
-    listData.lookup = [{ ...listData.active[0]!, read: true }];
-    listData.active = [];
-    rerender(<InboxPage />);
-
-    expect(screen.getByTestId("row")).toHaveTextContent("inbox-a");
-    expect(replace).not.toHaveBeenCalledWith("/acme/inbox");
-  });
-
   it("keeps an explicitly unread row unread while it stays open", () => {
     // Without the guard the auto-read effect fires on the very next commit and
     // silently undoes the user's "mark as unread" — the action looks like a

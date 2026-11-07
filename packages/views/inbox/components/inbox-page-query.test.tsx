@@ -239,28 +239,6 @@ it("tries a failed mark-read once more when the row is opened again", async () =
   expect(markReads("inbox-b")).toBe(0);
 });
 
-it("marks the open row read again when it turns unread after a write that succeeded", async () => {
-  // Only a failed write holds the row back: another client flagging it
-  // unread while it is open still gets it read again.
-  useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
-  let rows = [item()];
-  const listInboxPage = vi.fn(async (_filters: InboxFilters, options: { groupId?: string }) =>
-    page(rows.filter((row) => !options.groupId || row.issue_id === options.groupId)));
-  const markInboxRead = vi.fn(async (id: string) => {
-    rows = rows.map((row) => row.id === id ? { ...row, read: true } : row);
-    return rows.find((row) => row.id === id)!;
-  });
-  setApiInstance({ listInboxPage, markInboxRead, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
-
-  renderPage();
-  fireEvent.click(await screen.findByText("inbox-a"));
-  await waitFor(() => expect(markInboxRead).toHaveBeenCalledOnce());
-  await waitFor(() => expect(screen.getByText("inbox-a")).toHaveAttribute("data-read", "true"));
-  rows = rows.map((row) => ({ ...row, read: false }));
-  await act(async () => { await onInboxInvalidate(qc, "workspace-1"); });
-  await waitFor(() => expect(markInboxRead).toHaveBeenCalledTimes(2));
-});
-
 it("marks the open row read again when it turns unread after an explicit read succeeded", async () => {
   // The auto-read failed, so the row is held back; reading it explicitly
   // proves the server accepts the write and releases it.

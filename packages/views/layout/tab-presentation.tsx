@@ -80,9 +80,9 @@ const PENDING_RESOURCE_KEYS: ReadonlySet<TabLabelKey> = new Set<TabLabelKey>([
 function useTabEntityData(subject: TabSubject, wsId: string): TabEntityData {
   const { t: chatT } = useT("chat");
 
-  // Read both inbox views cache-only; each keeps its own pages and deep-link
-  // lookups, so a selection has to resolve against the caches of its view —
-  // the same ones the InboxPage populates for it.
+  // Read both inbox lists cache-only; the archived view keeps its own list, so
+  // an archived selection has to resolve against the archived cache — the same
+  // list the InboxPage populates when `?view=archived` is active.
   const inboxFilters = useInboxFilters(wsId);
   const selectedInboxKey = subject.kind === "inbox" ? subject.selectedKey ?? "" : "";
   const inboxPages = useInfiniteQuery({ ...inboxPagesOptions(wsId, inboxFilters), enabled: false }).data;

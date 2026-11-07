@@ -10,8 +10,7 @@ export const inboxKeys = {
   all: (wsId: string) => ["inbox", wsId] as const,
   // Every cache of a view's rows nests under that view's prefix — the pages
   // and the deep-link lookups — so one prefix patches or refreshes the whole
-  // view. Facets hold counts, not rows, so they sit
-  // outside both prefixes.
+  // view. Facets hold counts, not rows, so they sit outside both prefixes.
   list: (wsId: string) => [...inboxKeys.all(wsId), "list"] as const,
   listPages: (wsId: string) => [...inboxKeys.list(wsId), "pages"] as const,
   listLookup: (wsId: string) => [...inboxKeys.list(wsId), "lookup"] as const,
@@ -48,9 +47,9 @@ export function inboxPagesOptions(wsId: string, filters: InboxFilters) {
 }
 
 /**
- * One active group by key, for a selection beyond the loaded pages. Like the
- * archive's lookup it only says whether the group exists, never whether it is
- * idle.
+ * One active group by key, for a selection beyond the loaded pages. It always
+ * asks `idleOnly: false`, so it says whether the group exists, never whether
+ * it is idle.
  */
 export function inboxLookupOptions(wsId: string, groupId: string, filters: ArchivedInboxFilters = EMPTY_INBOX_FILTERS) {
   return queryOptions({
@@ -66,6 +65,18 @@ export function inboxFacetsOptions(wsId: string, filters: InboxFilters) {
     queryKey: [...inboxKeys.listFacets(wsId), normalizedActiveInboxFilters(filters)],
     queryFn: ({ signal }) => api.getInboxFacets(filters, signal),
     retry: false,
+  });
+}
+
+/**
+ * @deprecated Legacy array endpoint, capped at 200 groups. New archive
+ * consumers must use archivedInboxPagesOptions for the complete archive.
+ * Retained for compatibility with legacy cache consumers.
+ */
+export function archivedInboxListOptions(wsId: string) {
+  return queryOptions({
+    queryKey: inboxKeys.archived(wsId),
+    queryFn: () => api.listArchivedInbox(),
   });
 }
 
