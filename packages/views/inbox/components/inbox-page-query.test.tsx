@@ -490,8 +490,8 @@ it("lists a row the server re-read as idle even when a task event lands during t
     await refresh;
   });
   await waitFor(() => expect(listInboxPage).toHaveBeenCalledTimes(2));
-  const cachedPage = qc.getQueriesData({ queryKey: inboxKeys.listPages("workspace-1") })[0][1] as { pages: InboxPageData[] };
-  expect(cachedPage.pages[0].items.map((row) => row.id)).toContain("inbox-b");
+  const cachedPage = qc.getQueriesData({ queryKey: inboxKeys.listPages("workspace-1") })[0]?.[1] as { pages: InboxPageData[] };
+  expect(cachedPage.pages[0]?.items.map((row) => row.id)).toContain("inbox-b");
   expect(getAgentTaskSnapshot).toHaveBeenCalledOnce();
   await waitFor(() => expect(screen.queryByText("inbox-b")).toBeInTheDocument());
 });
@@ -512,7 +512,7 @@ it("replaces a busy pinned row from its lookup without duplication or detail unm
   const detail = await screen.findByTestId("detail");
   await act(async () => {
     busy = true;
-    qc.setQueryData(snapshotKey, [{ id: "task-a", agent_id: "agent-1", issue_id: "issue-a", status: "running" }]);
+    qc.setQueryData(snapshotKey, [{ id: "task-a", agent_id: "agent-1", issue_id: "issue-a", status: "running" } as AgentTask]);
   });
   await waitFor(() => expect(listInboxPage.mock.calls.filter(([_, options]) => !options.groupId)).toHaveLength(2));
   expect(screen.getAllByText("inbox-a")).toHaveLength(1);
