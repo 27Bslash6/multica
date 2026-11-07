@@ -46,7 +46,7 @@ vi.mock("@tanstack/react-query", () => ({
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
-    ...(options.queryKey.includes("lookup") ? lookupState : {}),
+    ...(options.queryKey.includes("lookup") ? { ...lookupState, isPending: lookupState.isLoading } : {}),
   }); },
   useInfiniteQuery: (options: { queryKey: readonly unknown[]; enabled?: boolean }) => {
     queryCalls.push(options);
