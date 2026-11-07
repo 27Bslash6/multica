@@ -42,6 +42,8 @@ type inboxFacetsResponse struct {
 	Priorities  map[string]int64 `json:"priorities"`
 	Actors      map[string]int64 `json:"actors"`
 	UnreadCount int64            `json:"unread_count"`
+	// Active view only: the archive has no idle dimension.
+	IdleCount *int64 `json:"idle_count,omitempty"`
 }
 
 // The archived endpoints answer with the same shapes.
@@ -54,6 +56,8 @@ type (
 // the archived facet params type itself rather than a copy with the same
 // fields, because its JSON form is hashed into every archived cursor (see
 // inboxPageScope): changing it would void archived cursors already issued.
+// For the same reason the active view's idle dimension (`idle_only`: only
+// groups whose issue no agent is running or queued on) travels beside it.
 type inboxFilters = db.ArchivedInboxFacetsParams
 
 // inboxView names the list a page request reads. It is part of the cursor
@@ -109,32 +113,38 @@ func parseInboxFilters(w http.ResponseWriter, r *http.Request) (inboxFilters, bo
 			*target = slices.Compact(*target)
 		}
 	}
-	if raw := q.Get("unread_only"); raw != "" {
-		if raw != "true" && raw != "false" {
-			writeError(w, http.StatusBadRequest, "invalid unread_only")
-			return p, false
-		}
-		p.UnreadOnly = raw == "true"
+	p.UnreadOnly, ok = parseInboxFlag(w, r, "unread_only")
+	return p, ok
+}
+
+// parseInboxFlag reads an optional `true`/`false` query parameter.
+func parseInboxFlag(w http.ResponseWriter, r *http.Request, name string) (bool, bool) {
+	raw := r.URL.Query().Get(name)
+	if raw != "" && raw != "true" && raw != "false" {
+		writeError(w, http.StatusBadRequest, "invalid "+name)
+		return false, false
 	}
-	return p, true
+	return raw == "true", true
 }
 
 // A cursor is tied to the view, recipient and filters, so it cannot
 // accidentally continue a different list or a changed filter selection. The
-// archived view hashes exactly the bytes it always has: an empty view is
-// omitted from the JSON.
-func inboxPageScope(view inboxView, p inboxFilters, groupID pgtype.UUID) string {
+// archived view hashes exactly the bytes it always has: an empty view and an
+// unset idle dimension are omitted from the JSON.
+func inboxPageScope(view inboxView, p inboxFilters, idleOnly bool, groupID pgtype.UUID) string {
 	encoded, _ := json.Marshal(struct {
 		View    inboxView `json:",omitempty"`
 		Filters inboxFilters
+		Idle    bool `json:",omitempty"`
 		Group   pgtype.UUID
-	}{view, p, groupID})
+	}{view, p, idleOnly, groupID})
 	return fmt.Sprintf("%x", sha256.Sum256(encoded))
 }
 
 // parseInboxPageRequest reads the filters, group lookup, limit and cursor of a
-// page request. The returned params ask for one row beyond the limit, which is
-// how writeInboxPage learns whether another page exists.
+// page request; only the active view reads the idle dimension. The returned
+// params ask for one row beyond the limit, which is how writeInboxPage learns
+// whether another page exists.
 func parseInboxPageRequest(w http.ResponseWriter, r *http.Request, view inboxView) (p db.ListInboxPageParams, limit int, scope string, ok bool) {
 	filters, ok := parseInboxFilters(w, r)
 	if !ok {
@@ -143,6 +153,11 @@ func parseInboxPageRequest(w http.ResponseWriter, r *http.Request, view inboxVie
 	p = db.ListInboxPageParams{
 		WorkspaceID: filters.WorkspaceID, RecipientID: filters.RecipientID,
 		Statuses: filters.Statuses, Priorities: filters.Priorities, Actors: filters.Actors, UnreadOnly: filters.UnreadOnly,
+	}
+	if view == activeInboxView {
+		if p.IdleOnly, ok = parseInboxFlag(w, r, "idle_only"); !ok {
+			return p, 0, "", false
+		}
 	}
 	limit = 50
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -159,7 +174,7 @@ func parseInboxPageRequest(w http.ResponseWriter, r *http.Request, view inboxVie
 			return p, 0, "", false
 		}
 	}
-	scope = inboxPageScope(view, filters, p.GroupID)
+	scope = inboxPageScope(view, filters, p.IdleOnly, p.GroupID)
 	if raw := r.URL.Query().Get("cursor"); raw != "" {
 		invalid := "invalid " + view.cursorNoun() + " cursor"
 		if len(raw) > 2048 {
@@ -236,6 +251,8 @@ func (f *inboxFacetsResponse) add(dimension, key string, count int64) {
 		f.Actors[key] = count
 	case "unread":
 		f.UnreadCount = count
+	case "idle":
+		f.IdleCount = &count
 	}
 }
 
@@ -262,7 +279,14 @@ func (h *Handler) GetInboxFacets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := h.Queries.InboxFacets(r.Context(), db.InboxFacetsParams(p))
+	idleOnly, ok := parseInboxFlag(w, r, "idle_only")
+	if !ok {
+		return
+	}
+	rows, err := h.Queries.InboxFacets(r.Context(), db.InboxFacetsParams{
+		WorkspaceID: p.WorkspaceID, RecipientID: p.RecipientID,
+		Statuses: p.Statuses, Priorities: p.Priorities, Actors: p.Actors, UnreadOnly: p.UnreadOnly, IdleOnly: idleOnly,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load inbox filters")
 		return

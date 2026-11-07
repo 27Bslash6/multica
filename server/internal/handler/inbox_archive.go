@@ -14,7 +14,12 @@ func (h *Handler) ListArchivedInboxPage(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	rows, err := h.Queries.ListArchivedInboxPage(r.Context(), db.ListArchivedInboxPageParams(p))
+	// The archive has no idle dimension, so the request never set IdleOnly.
+	rows, err := h.Queries.ListArchivedInboxPage(r.Context(), db.ListArchivedInboxPageParams{
+		WorkspaceID: p.WorkspaceID, RecipientID: p.RecipientID, GroupID: p.GroupID,
+		Statuses: p.Statuses, Priorities: p.Priorities, Actors: p.Actors, UnreadOnly: p.UnreadOnly,
+		BeforeTime: p.BeforeTime, BeforeID: p.BeforeID, PageLimit: p.PageLimit,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load archived inbox page")
 		return
