@@ -7,13 +7,39 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+// The handlers copy params field by field between the active and archived
+// generated types, which differ by the idle dimension. A dimension added to
+// one view's query and not the other would otherwise be dropped silently.
+func TestInboxParamsDifferOnlyByIdle(t *testing.T) {
+	fields := func(v any) []string {
+		var names []string
+		for field := range reflect.TypeOf(v).Fields() {
+			if field.Name != "IdleOnly" {
+				names = append(names, field.Name)
+			}
+		}
+		return names
+	}
+	for _, pair := range [][2]any{
+		{db.ListInboxPageParams{}, db.ListArchivedInboxPageParams{}},
+		{db.InboxFacetsParams{}, db.ArchivedInboxFacetsParams{}},
+	} {
+		if active, archived := fields(pair[0]), fields(pair[1]); !slices.Equal(active, archived) {
+			t.Fatalf("%T fields %v, %T fields %v", pair[0], active, pair[1], archived)
+		}
+	}
+}
 
 func TestInboxPagePagesActiveGroups(t *testing.T) {
 	ws := dbfx.Workspace(t, "Paged inbox", "inbox-page-"+uuid.NewString())
@@ -320,6 +346,24 @@ func TestInboxPageIdleDimension(t *testing.T) {
 	}
 	if all := walk("idle_only=false"); len(all) != len(groups) {
 		t.Fatalf("unfiltered walk = %d groups, want %d", len(all), len(groups))
+	}
+	// The busy rule is a copy of the task snapshot's, which the activity badge
+	// reads; an upstream change to either would not conflict on merge. Every
+	// snapshot row but each agent's latest completed or failed task is active.
+	snapshot, err := testHandler.Queries.ListWorkspaceAgentTaskSnapshot(t.Context(), parseUUID(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotBusy := map[string]bool{}
+	for _, task := range snapshot {
+		if task.Status != "completed" && task.Status != "failed" {
+			snapshotBusy[uuidToString(task.IssueID)] = true
+		}
+	}
+	for _, id := range append([]string{noTask, finished}, busy...) {
+		if idle[id] == snapshotBusy[id] {
+			t.Fatalf("issue %s: idle = %v, but the task snapshot counts it busy = %v", id, idle[id], snapshotBusy[id])
+		}
 	}
 	// The idle count is faceted like the unread count: it respects the other
 	// dimensions, never its own, and equals the idle walk under the same filters.

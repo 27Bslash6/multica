@@ -79,6 +79,8 @@ WITH newest AS MATERIALIZED (
       AND i.archived = false
     ORDER BY COALESCE(i.issue_id, i.id), i.created_at DESC, i.id DESC
 ), busy AS (
+    -- Issues an agent is running or queued on: the active half of
+    -- ListWorkspaceAgentTaskSnapshot, which the client's activity badge reads.
     SELECT atq.issue_id FROM agent_task_queue atq
     JOIN agent a ON a.id = atq.agent_id
     WHERE a.workspace_id = sqlc.arg(workspace_id)::uuid AND atq.issue_id IS NOT NULL
