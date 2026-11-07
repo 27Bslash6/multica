@@ -103,7 +103,7 @@
     "unarchived": "알림을 복원했습니다"
   },
   "errors": {
-    "lookup_failed": "링크된 알림을 불러오지 못했습니다",
+    "archived_lookup_failed": "링크된 알림을 불러오지 못했습니다",
     "source_context_retry_failed": "원본 컨텍스트로 재시도하지 못했습니다",
     "source_context_retry_unavailable": "이 컨텍스트는 더 이상 재시도할 수 없습니다. 분기 지점에서 다시 시작하세요.",
     "mark_read_failed": "읽음 표시를 하지 못했습니다",

@@ -1,5 +1,5 @@
 import type { InfiniteData, QueryClient, QueryKey } from "@tanstack/react-query";
-import type { InboxPage } from "../types/inbox";
+import type { ArchivedInboxPage } from "../types/inbox";
 import { EMPTY_INBOX_FILTERS, type ArchivedInboxFilters, type InboxFilters } from "./filter-store";
 import { infiniteQueryOptions, queryOptions, useQuery } from "@tanstack/react-query";
 import { api } from "../api";
@@ -29,13 +29,6 @@ export const inboxKeys = {
 // one call site can pick either view's options.
 type InboxFiltersKey = ArchivedInboxFilters & { idleOnly?: boolean };
 
-// Lists the paged dimensions explicitly. The archive has no idle dimension, so
-// an `idleOnly` never changes its keys or refetches it.
-function normalizedInboxFilters(filters: ArchivedInboxFilters): InboxFiltersKey {
-  return { statuses: [...filters.statuses].sort(), priorities: [...filters.priorities].sort(),
-    actors: [...filters.actors].sort(), unreadOnly: filters.unreadOnly };
-}
-
 function normalizedActiveInboxFilters(filters: InboxFilters): InboxFiltersKey {
   return { ...normalizedInboxFilters(filters), idleOnly: filters.idleOnly };
 }
@@ -54,11 +47,15 @@ export function inboxPagesOptions(wsId: string, filters: InboxFilters) {
   });
 }
 
-/** One active group by key, for a selection beyond the loaded pages. */
-export function inboxLookupOptions(wsId: string, groupId: string, filters: InboxFilters = EMPTY_INBOX_FILTERS) {
+/**
+ * One active group by key, for a selection beyond the loaded pages. Like the
+ * archive's lookup it only says whether the group exists, never whether it is
+ * idle.
+ */
+export function inboxLookupOptions(wsId: string, groupId: string, filters: ArchivedInboxFilters = EMPTY_INBOX_FILTERS) {
   return queryOptions({
-    queryKey: [...inboxKeys.listLookup(wsId), groupId, normalizedActiveInboxFilters(filters)],
-    queryFn: ({ signal }) => api.listInboxPage(filters, { groupId, signal }),
+    queryKey: [...inboxKeys.listLookup(wsId), groupId, normalizedInboxFilters(filters)],
+    queryFn: ({ signal }) => api.listInboxPage({ ...filters, idleOnly: false }, { groupId, signal }),
     enabled: !!groupId,
     retry: false,
   });
@@ -70,6 +67,13 @@ export function inboxFacetsOptions(wsId: string, filters: InboxFilters) {
     queryFn: ({ signal }) => api.getInboxFacets(filters, signal),
     retry: false,
   });
+}
+
+// Lists the archived dimensions explicitly, so an `idleOnly` carried in from
+// the active inbox never changes the key or refetches the archive.
+function normalizedInboxFilters(filters: ArchivedInboxFilters): InboxFiltersKey {
+  return { statuses: [...filters.statuses].sort(), priorities: [...filters.priorities].sort(),
+    actors: [...filters.actors].sort(), unreadOnly: filters.unreadOnly };
 }
 
 export function archivedInboxPagesOptions(wsId: string, filters: ArchivedInboxFilters) {
@@ -99,15 +103,13 @@ export function archivedInboxFacetsOptions(wsId: string, filters: ArchivedInboxF
   });
 }
 
-/** Any cache of one view's rows: a lookup page, or the pages. */
-export type InboxCache = InboxPage | InfiniteData<InboxPage>;
+export type ArchivedInboxCache = InboxItem[] | ArchivedInboxPage | InfiniteData<ArchivedInboxPage>;
 
-/**
- * Apply an items patch to any row cache. A patch that returns its input
- * unchanged leaves the cache's identity intact, so an issue event that
- * touches no loaded row re-renders nothing.
- */
-export function mapInboxCache(data: InboxCache, patch: (items: InboxItem[]) => InboxItem[]): InboxCache {
+// Serves both views' row caches. A patch that returns its input unchanged
+// leaves the cache's identity intact, so an issue event that touches no loaded
+// row re-renders nothing.
+export function mapArchivedInboxCache(data: ArchivedInboxCache, patch: (items: InboxItem[]) => InboxItem[]): ArchivedInboxCache {
+  if (Array.isArray(data)) return patch(data);
   if ("pages" in data) {
     let changed = false;
     const pages = data.pages.map((page) => {
@@ -123,8 +125,8 @@ export function mapInboxCache(data: InboxCache, patch: (items: InboxItem[]) => I
 }
 
 /** Every loaded row of any row cache. */
-export function inboxCacheItems(data: InboxCache): InboxItem[] {
-  return "pages" in data ? data.pages.flatMap((page) => page.items) : data.items;
+export function inboxCacheItems(data: ArchivedInboxCache): InboxItem[] {
+  return Array.isArray(data) ? data : "pages" in data ? data.pages.flatMap((page) => page.items) : data.items;
 }
 
 /**
@@ -132,9 +134,9 @@ export function inboxCacheItems(data: InboxCache): InboxItem[] {
  * `inboxKeys.archived`) and return the snapshot to roll back to.
  */
 export function patchInboxCaches(qc: QueryClient, prefix: QueryKey, patch: (items: InboxItem[]) => InboxItem[]) {
-  const snapshot = qc.getQueriesData<InboxCache>({ queryKey: prefix });
+  const snapshot = qc.getQueriesData<ArchivedInboxCache>({ queryKey: prefix });
   for (const [key, data] of snapshot) {
-    if (data) qc.setQueryData(key, mapInboxCache(data, patch));
+    if (data) qc.setQueryData(key, mapArchivedInboxCache(data, patch));
   }
   return snapshot;
 }
@@ -220,7 +222,7 @@ export function unreadCountForWorkspace(
  * Read from the cross-workspace summary, NOT from the inbox list. The summary
  * is one small server-computed row per workspace and the sidebar already
  * fetches it for the workspace-switcher dot, so the badge costs no request of
- * its own; deriving it from the full inbox list instead downloaded the entire
+ * its own; deriving it from `listInbox()` instead downloaded the entire
  * unbounded inbox on every app start just to render a number (MUL-6967).
  *
  * `GET /api/inbox/unread-count` is deliberately not the source: it counts raw

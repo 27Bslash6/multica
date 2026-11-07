@@ -9,7 +9,7 @@ import {
 import { api } from "../api";
 import { issueKeys } from "./queries";
 import { projectKeys } from "../projects/queries";
-import type { InboxCache } from "../inbox/queries";
+import type { ArchivedInboxCache } from "../inbox/queries";
 import {
   cancelInboxLists,
   isInboxListRequestInFlight,
@@ -567,7 +567,7 @@ export function useBatchUpdateIssues() {
         [QueryKey, IssueTableRowCache]
       >();
       const prevDetailById = new Map<string, Issue>();
-      let prevInboxCaches: [QueryKey, InboxCache | undefined][] | undefined;
+      let prevInboxCaches: [QueryKey, ArchivedInboxCache | undefined][] | undefined;
       const staleKeys: QueryKey[] = [];
       for (const id of ids) {
         const base = qc.getQueryData<Issue>(issueKeys.detail(wsId, id));

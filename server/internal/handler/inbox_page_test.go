@@ -2,7 +2,6 @@ package handler
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -395,8 +394,9 @@ func TestInboxPageIdleDimension(t *testing.T) {
 	testutil.Call(t, inboxWorkspaceHandler(testHandler.GetInboxFacets), inboxRequest(http.MethodGet, "/api/inbox/facets?idle_only=bad", ws)).Want(http.StatusBadRequest)
 }
 
-// The archive has no idle dimension: it ignores the parameter, answers without
-// an idle count, and still verifies a cursor issued before the dimension existed.
+// The archive has no idle dimension: it ignores the parameter and answers
+// without an idle count. TestInboxPageScopeKeepsArchivedCursorsValid pins its
+// cursor scope.
 func TestArchivedInboxIgnoresIdleDimension(t *testing.T) {
 	ws := dbfx.Workspace(t, "Idle archive", "inbox-idle-archive-"+uuid.NewString())
 	dbfx.Member(t, ws, testUserID, "owner")
@@ -405,14 +405,12 @@ func TestArchivedInboxIgnoresIdleDimension(t *testing.T) {
 	busy := dbfx.Issue(t, "Busy archived", testutil.Cols{"workspace_id": ws})
 	dbfx.Task(t, agent, testutil.Cols{"issue_id": busy, "runtime_id": runtime, "status": "running"})
 	created := time.Now().UTC().Truncate(time.Microsecond)
-	newest := ""
 	for i, group := range []*string{&busy, nil, nil} {
-		id := dbfx.Insert(t, "inbox_item", testutil.Cols{
+		dbfx.Insert(t, "inbox_item", testutil.Cols{
 			"workspace_id": ws, "recipient_type": "member", "recipient_id": testUserID,
 			"type": "mentioned", "severity": "info", "title": "Archived", "issue_id": group,
 			"archived": true, "created_at": created.Add(time.Duration(i) * time.Second),
 		})
-		newest = id
 	}
 	get := func(query string, status int) archivedInboxPageResponse {
 		t.Helper()
@@ -430,19 +428,5 @@ func TestArchivedInboxIgnoresIdleDimension(t *testing.T) {
 	testutil.Call(t, inboxWorkspaceHandler(testHandler.GetArchivedInboxFacets), inboxRequest(http.MethodGet, "/api/inbox/archived/facets?idle_only=true", ws)).Want(http.StatusOK).JSON(&facets)
 	if _, ok := facets["idle_count"]; ok || string(facets["unread_count"]) != "3" {
 		t.Fatalf("archived facets changed shape: %v", facets)
-	}
-
-	// A cursor after the newest group, scoped the way archived cursors were
-	// scoped before the idle dimension existed.
-	filters := inboxFilters{WorkspaceID: parseUUID(ws), RecipientID: parseUUID(testUserID), Statuses: []string{}, Priorities: []string{}, Actors: []string{}}
-	encoded, err := json.Marshal(inboxPageCursor{
-		Time: created.Add(2 * time.Second).Format(time.RFC3339Nano), ID: newest,
-		Scope: oldArchivedInboxScope(t, filters, pgtype.UUID{}),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if page := get("cursor="+base64.RawURLEncoding.EncodeToString(encoded), http.StatusOK); len(page.Items) != 2 {
-		t.Fatalf("old archived cursor did not continue the archive: %+v", page)
 	}
 }

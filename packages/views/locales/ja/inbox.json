@@ -103,7 +103,7 @@
     "unarchived": "通知を元に戻しました"
   },
   "errors": {
-    "lookup_failed": "リンク先の通知を読み込めませんでした",
+    "archived_lookup_failed": "リンク先の通知を読み込めませんでした",
     "source_context_retry_failed": "元のコンテキストで再試行できませんでした",
     "source_context_retry_unavailable": "このコンテキストは再試行できません。分岐点からやり直してください。",
     "mark_read_failed": "既読にできませんでした",

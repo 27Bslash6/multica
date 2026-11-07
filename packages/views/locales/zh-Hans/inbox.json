@@ -103,7 +103,7 @@
     "unarchived": "已恢复通知"
   },
   "errors": {
-    "lookup_failed": "无法加载链接指向的通知",
+    "archived_lookup_failed": "无法加载链接指向的通知",
     "source_context_retry_failed": "无法使用原始上下文重试",
     "source_context_retry_unavailable": "该上下文已无法重试，请从派生起点重新发起。",
     "mark_read_failed": "标为已读失败",

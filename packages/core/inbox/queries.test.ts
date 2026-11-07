@@ -9,7 +9,6 @@ import {
   hasOtherWorkspaceUnread,
   inboxFacetsOptions,
   inboxKeys,
-  inboxLookupOptions,
   inboxPagesOptions,
   unreadCountForWorkspace,
   unreadWorkspaceIds,
@@ -157,11 +156,10 @@ describe("archived inbox options", () => {
 });
 
 describe("active inbox options", () => {
-  it("keys the active pages, lookups and facets by the idle selection, which the server filters on", () => {
+  it("keys the active pages and facets by the idle selection, which the server filters on", () => {
     const idle: InboxFilters = { ...EMPTY_INBOX_FILTERS, idleOnly: true };
 
     expect(inboxPagesOptions("ws", idle).queryKey).not.toEqual(inboxPagesOptions("ws", EMPTY_INBOX_FILTERS).queryKey);
-    expect(inboxLookupOptions("ws", "group", idle).queryKey).not.toEqual(inboxLookupOptions("ws", "group").queryKey);
     expect(inboxFacetsOptions("ws", idle).queryKey).not.toEqual(inboxFacetsOptions("ws", EMPTY_INBOX_FILTERS).queryKey);
   });
 });

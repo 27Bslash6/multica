@@ -4,7 +4,7 @@ import type { IssueWakeup, IssueWakeupInput, IssueWakeupSummaryRow, PausedWakeup
 import type { WorkspaceWakeupPage, WorkspaceWakeupFilters } from "../types/issue-wakeup";
 import { WorkspaceWakeupPageSchema, IssueWakeupSchema, IssueWakeupSummaryRowSchema, PausedWakeupSchema, SystemWakeupSchema, WakeupRunSchema, WorkspaceSystemWakeupSchema } from "./schemas";
 import type { ArchivedInboxFilters, InboxFilters } from "../inbox/filter-store";
-import type { InboxPage, InboxFacets } from "../types/inbox";
+import type { ArchivedInboxPage, ArchivedInboxFacets } from "../types/inbox";
 import { parseQoderConnection, parseQoderCatalog, type QoderInput } from "../runtimes/qoder-schema";
 import { configStore } from "../config";
 import type {
@@ -406,8 +406,10 @@ import {
   EMPTY_CREATE_FEEDBACK_RESPONSE,
   InboxUnreadSummarySchema,
   EMPTY_INBOX_UNREAD_SUMMARY,
-  InboxPageSchema,
-  InboxFacetsSchema,
+  InboxItemListSchema,
+  ArchivedInboxPageSchema,
+  ArchivedInboxFacetsSchema,
+  EMPTY_INBOX_ITEMS,
   NotificationPreferenceResponseSchema,
   EMPTY_NOTIFICATION_PREFERENCE_RESPONSE,
   LabelSchema,
@@ -2917,6 +2919,13 @@ export class ApiClient {
   }
 
   // Inbox
+  async listInbox(): Promise<InboxItem[]> {
+    const raw = await this.fetch<unknown>("/api/inbox");
+    return parseWithFallback(raw, InboxItemListSchema, EMPTY_INBOX_ITEMS, {
+      endpoint: "GET /api/inbox",
+    });
+  }
+
   async markInboxRead(id: string): Promise<InboxItem> {
     return this.fetch(`/api/inbox/${id}/read`, { method: "POST" });
   }
@@ -2929,7 +2938,17 @@ export class ApiClient {
     return this.fetch(`/api/inbox/${id}/archive`, { method: "POST" });
   }
 
-  private inboxFilterParams(filters: ArchivedInboxFilters): URLSearchParams {
+  // Archived notifications, backing the inbox's "Archived" sub-view. Capped
+  // server-side (no pagination in v1). Schema-guarded so a contract drift
+  // renders an empty archive instead of taking the inbox down with it.
+  async listArchivedInbox(): Promise<InboxItem[]> {
+    const raw = await this.fetch<unknown>("/api/inbox/archived");
+    return parseWithFallback(raw, InboxItemListSchema, EMPTY_INBOX_ITEMS, {
+      endpoint: "GET /api/inbox/archived",
+    });
+  }
+
+  private archivedInboxParams(filters: ArchivedInboxFilters): URLSearchParams {
     const params = new URLSearchParams();
     if (filters.statuses.length) params.set("statuses", [...filters.statuses].sort().join(","));
     if (filters.priorities.length) params.set("priorities", [...filters.priorities].sort().join(","));
@@ -2941,7 +2960,7 @@ export class ApiClient {
   // Only the active view has an idle dimension; the archive never sends one,
   // whatever selection the filters object carries.
   private activeInboxFilterParams(filters: InboxFilters): URLSearchParams {
-    const params = this.inboxFilterParams(filters);
+    const params = this.archivedInboxParams(filters);
     if (filters.idleOnly) params.set("idle_only", "true");
     return params;
   }
@@ -2949,37 +2968,37 @@ export class ApiClient {
   // The active and archived views page through issue groups with one
   // contract; `label` only names the view in the error a malformed response
   // raises.
-  private async fetchInboxPage(path: string, label: string, params: URLSearchParams, options: InboxPageRequest): Promise<InboxPage> {
+  private async fetchInboxPage(path: string, label: string, params: URLSearchParams, options: InboxPageRequest): Promise<ArchivedInboxPage> {
     params.set("limit", "50");
     if (options.cursor) params.set("cursor", options.cursor);
     if (options.groupId) params.set("group_id", options.groupId);
     const raw = await this.fetch<unknown>(`${path}?${params}`, { signal: options.signal });
-    const page = parseWithFallback<InboxPage | null>(raw, InboxPageSchema, null, { endpoint: `GET ${path}` });
+    const page = parseWithFallback<ArchivedInboxPage | null>(raw, ArchivedInboxPageSchema, null, { endpoint: `GET ${path}` });
     if (!page) throw new Error(`Invalid ${label} page response`);
     return page;
   }
 
-  private async fetchInboxFacets(path: string, label: string, params: URLSearchParams, signal?: AbortSignal): Promise<InboxFacets> {
+  private async fetchInboxFacets(path: string, label: string, params: URLSearchParams, signal?: AbortSignal): Promise<ArchivedInboxFacets> {
     const raw = await this.fetch<unknown>(`${path}?${params}`, { signal });
-    const facets = parseWithFallback<InboxFacets | null>(raw, InboxFacetsSchema, null, { endpoint: `GET ${path}` });
+    const facets = parseWithFallback<ArchivedInboxFacets | null>(raw, ArchivedInboxFacetsSchema, null, { endpoint: `GET ${path}` });
     if (!facets) throw new Error(`Invalid ${label} facets response`);
     return facets;
   }
 
-  async listInboxPage(filters: InboxFilters, options: InboxPageRequest = {}): Promise<InboxPage> {
+  async listInboxPage(filters: InboxFilters, options: InboxPageRequest = {}): Promise<ArchivedInboxPage> {
     return this.fetchInboxPage("/api/inbox/page", "inbox", this.activeInboxFilterParams(filters), options);
   }
 
-  async getInboxFacets(filters: InboxFilters, signal?: AbortSignal): Promise<InboxFacets> {
+  async getInboxFacets(filters: InboxFilters, signal?: AbortSignal): Promise<ArchivedInboxFacets> {
     return this.fetchInboxFacets("/api/inbox/facets", "inbox", this.activeInboxFilterParams(filters), signal);
   }
 
-  async listArchivedInboxPage(filters: ArchivedInboxFilters, options: InboxPageRequest = {}): Promise<InboxPage> {
-    return this.fetchInboxPage("/api/inbox/archived/page", "archived inbox", this.inboxFilterParams(filters), options);
+  async listArchivedInboxPage(filters: ArchivedInboxFilters, options: InboxPageRequest = {}): Promise<ArchivedInboxPage> {
+    return this.fetchInboxPage("/api/inbox/archived/page", "archived inbox", this.archivedInboxParams(filters), options);
   }
 
-  async getArchivedInboxFacets(filters: ArchivedInboxFilters, signal?: AbortSignal): Promise<InboxFacets> {
-    return this.fetchInboxFacets("/api/inbox/archived/facets", "archived inbox", this.inboxFilterParams(filters), signal);
+  async getArchivedInboxFacets(filters: ArchivedInboxFilters, signal?: AbortSignal): Promise<ArchivedInboxFacets> {
+    return this.fetchInboxFacets("/api/inbox/archived/facets", "archived inbox", this.archivedInboxParams(filters), signal);
   }
 
   async unarchiveInbox(id: string): Promise<InboxItem> {

@@ -74,12 +74,4 @@ func TestInboxPageAndFacetsThroughRouter(t *testing.T) {
 	if facets.Statuses == nil || facets.Priorities == nil || facets.Actors == nil || facets.UnreadCount < 1 || facets.IdleCount == nil {
 		t.Fatalf("facets contract: %+v", facets)
 	}
-	resp = authRequest(t, "GET", "/api/inbox/page?idle_only=true&group_id="+itemID, nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("idle inbox page status = %d", resp.StatusCode)
-	}
-	readJSON(t, resp, &page)
-	if len(page.Items) != 0 {
-		t.Fatalf("a notification without an issue matched the idle filter: %+v", page)
-	}
 }

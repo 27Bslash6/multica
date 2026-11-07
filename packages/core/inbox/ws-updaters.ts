@@ -1,6 +1,6 @@
 import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
 import type { InboxFilters } from "./filter-store";
-import { inboxKeys, mapInboxCache, type InboxCache } from "./queries";
+import { inboxKeys, mapArchivedInboxCache, type ArchivedInboxCache } from "./queries";
 import type { InboxItem, IssuePriority, IssueStatus } from "../types";
 
 // Re-read a query because the server changed — in a way that is never answered
@@ -54,13 +54,11 @@ function patchInboxLists(
   wsId: string,
   patch: (items: InboxItem[]) => InboxItem[],
 ) {
-  const caches = [inboxKeys.list(wsId), inboxKeys.archived(wsId)]
-    .flatMap((prefix) => qc.getQueryCache().findAll({ queryKey: prefix }));
-  for (const { queryKey } of caches) {
+  for (const { queryKey } of [inboxKeys.list(wsId), inboxKeys.archived(wsId)].flatMap((prefix) => qc.getQueryCache().findAll({ queryKey: prefix }))) {
     const invalidated = qc.getQueryState(queryKey)?.isInvalidated === true;
-    qc.setQueryData<InboxCache>(queryKey, (old) => {
+    qc.setQueryData<ArchivedInboxCache>(queryKey, (old) => {
       if (!old) return undefined;
-      const next = mapInboxCache(old, patch);
+      const next = mapArchivedInboxCache(old, patch);
       return next === old ? undefined : next;
     });
     if (invalidated) {
@@ -190,19 +188,19 @@ export async function onInboxInvalidate(qc: QueryClient, wsId: string) {
 
 /**
  * Re-read what the busy issues (those an agent is running or queued on) can
- * change: the active facets, and the active pages and lookups filtered to idle
- * groups. The server decides which groups are idle, so only a re-read lists a
- * group that went idle. No other cache depends on task state. Cancelling first
+ * change: the active facets, and the active pages filtered to idle groups.
+ * The server decides which groups are idle, so only a re-read lists a group
+ * that went idle. No other cache depends on task state. Cancelling first
  * restarts a load that may have read the server before a task event.
  */
-export async function onInboxBusyIssuesChange(qc: QueryClient, wsId: string) {
-  const idleQueries = {
-    queryKey: inboxKeys.list(wsId),
+export async function refreshInboxIdleQueries(qc: QueryClient, wsId: string) {
+  const idlePages = {
+    queryKey: inboxKeys.listPages(wsId),
     predicate: (query: Query) => (query.queryKey.at(-1) as Partial<InboxFilters> | undefined)?.idleOnly === true,
   };
   await Promise.all([
     refreshInboxQuery(qc, inboxKeys.listFacets(wsId)),
-    qc.cancelQueries(idleQueries).then(() => qc.invalidateQueries(idleQueries)),
+    qc.cancelQueries(idlePages).then(() => qc.invalidateQueries(idlePages)),
   ]);
 }
 

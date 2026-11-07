@@ -11,10 +11,10 @@ import {
   onInboxInvalidate,
   onInboxIssueDeleted,
   onInboxNew,
-  onInboxBusyIssuesChange,
   onInboxIssueStatusChanged,
   onInboxSummaryInvalidate,
   patchInboxIssueProjection,
+  refreshInboxIdleQueries,
 } from "./ws-updaters";
 import { EMPTY_INBOX_FILTERS } from "./filter-store";
 import {
@@ -24,9 +24,9 @@ import {
   inboxCacheItems,
   inboxKeys,
   inboxPagesOptions,
-  type InboxCache,
+  type ArchivedInboxCache,
 } from "./queries";
-import type { InboxItem, InboxPage } from "../types";
+import type { InboxItem, ArchivedInboxPage } from "../types";
 
 const wsId = "ws-1";
 
@@ -59,25 +59,25 @@ function makeItem(
 const activePagesKey = inboxPagesOptions(wsId, EMPTY_INBOX_FILTERS).queryKey;
 const archivedPagesKey = archivedInboxPagesOptions(wsId, EMPTY_INBOX_FILTERS).queryKey;
 
-function pageOf(items: InboxItem[]): InboxPage {
+function pageOf(items: InboxItem[]): ArchivedInboxPage {
   return { items, nextCursor: null, hasMore: false };
 }
 
 // A view's pages cache after its first load: one page holding every row.
 function seedRows(qc: QueryClient, queryKey: QueryKey, items: InboxItem[]) {
-  qc.setQueryData<InfiniteData<InboxPage>>(queryKey, {
+  qc.setQueryData<InfiniteData<ArchivedInboxPage>>(queryKey, {
     pages: [pageOf(items)],
     pageParams: [null],
   });
 }
 
 function rows(qc: QueryClient, queryKey: QueryKey): InboxItem[] | undefined {
-  const data = qc.getQueryData<InboxCache>(queryKey);
+  const data = qc.getQueryData<ArchivedInboxCache>(queryKey);
   return data && inboxCacheItems(data);
 }
 
 // A single-page pages query whose requests the test controls.
-function pagesQuery(queryKey: QueryKey, queryFn: () => Promise<InboxPage>) {
+function pagesQuery(queryKey: QueryKey, queryFn: () => Promise<ArchivedInboxPage>) {
   return { queryKey, queryFn, initialPageParam: null, getNextPageParam: () => undefined };
 }
 
@@ -180,17 +180,16 @@ describe("onInboxInvalidate ordering", () => {
   });
 });
 
-describe("onInboxBusyIssuesChange", () => {
+describe("refreshInboxIdleQueries", () => {
   const idle = { ...EMPTY_INBOX_FILTERS, idleOnly: true };
   const invalidatedOf = (qc: QueryClient, keys: Record<string, QueryKey>) =>
     Object.fromEntries(Object.entries(keys).map(([name, key]) => [name, qc.getQueryState(key)?.isInvalidated]));
 
-  it("re-reads the active facets and idle-filtered pages and lookups, and nothing a task cannot change", async () => {
+  it("re-reads the active facets and idle-filtered pages, and nothing a task cannot change", async () => {
     const qc = new QueryClient();
     const keys = {
       idlePages: inboxPagesOptions(wsId, idle).queryKey,
       idleUnreadPages: inboxPagesOptions(wsId, { ...idle, unreadOnly: true }).queryKey,
-      idleLookup: inboxLookupOptions(wsId, "issue-2", idle).queryKey,
       facets: inboxFacetsOptions(wsId, EMPTY_INBOX_FILTERS).queryKey,
       pages: activePagesKey,
       lookup: inboxLookupOptions(wsId, "issue-1").queryKey,
@@ -199,10 +198,10 @@ describe("onInboxBusyIssuesChange", () => {
     };
     for (const key of Object.values<QueryKey>(keys)) qc.setQueryData(key, {});
 
-    await onInboxBusyIssuesChange(qc, wsId);
+    await refreshInboxIdleQueries(qc, wsId);
 
     expect(invalidatedOf(qc, keys)).toEqual({
-      idlePages: true, idleUnreadPages: true, idleLookup: true, facets: true,
+      idlePages: true, idleUnreadPages: true, facets: true,
       pages: false, lookup: false, archivedPages: false, otherWorkspace: false,
     });
   });
@@ -216,7 +215,7 @@ describe("onInboxBusyIssuesChange", () => {
     void qc.prefetchQuery({ queryKey: key, queryFn: firstLoad });
     expect(qc.getQueryState(key)?.fetchStatus).toBe("fetching");
 
-    await onInboxBusyIssuesChange(qc, wsId);
+    await refreshInboxIdleQueries(qc, wsId);
 
     expect(firstLoad).toHaveBeenCalledOnce();
     expect(qc.getQueryState(key)).toMatchObject({ fetchStatus: "idle", isInvalidated: true });
@@ -381,9 +380,9 @@ describe.each([
     const qc = new QueryClient();
     const loaded = pageOf([makeItem("i1", "issue-a")]);
     const settled = { pages: [loaded], pageParams: [null] };
-    let release!: (page: InboxPage) => void;
+    let release!: (page: ArchivedInboxPage) => void;
     const queryFn = vi
-      .fn<() => Promise<InboxPage>>()
+      .fn<() => Promise<ArchivedInboxPage>>()
       .mockResolvedValueOnce(loaded)
       .mockImplementationOnce(
         () => new Promise((resolve) => (release = resolve)),
@@ -421,13 +420,13 @@ describe("inbox list refresh during the first load", () => {
     ["read / archive event", (qc: QueryClient) => onInboxInvalidate(qc, wsId)],
   ])("re-reads the list after a %s arrives mid-load", async (_label, signal) => {
     const qc = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
-    let releaseFirst!: (page: InboxPage) => void;
-    const firstResponse = new Promise<InboxPage>((resolve) => {
+    let releaseFirst!: (page: ArchivedInboxPage) => void;
+    const firstResponse = new Promise<ArchivedInboxPage>((resolve) => {
       releaseFirst = resolve;
     });
     let server: InboxItem[] = [makeItem("n1", "issue-a", { read: true })];
     const queryFn = vi
-      .fn<() => Promise<InboxPage>>()
+      .fn<() => Promise<ArchivedInboxPage>>()
       .mockImplementationOnce(() => firstResponse)
       .mockImplementation(async () => pageOf(server));
     const observer = new InfiniteQueryObserver(qc, pagesQuery(activePagesKey, queryFn));

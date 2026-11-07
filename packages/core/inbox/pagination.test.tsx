@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
-import type { InboxPage, InboxItem, Issue } from "../types";
+import type { ArchivedInboxPage, InboxItem, Issue } from "../types";
 import { issueKeys } from "../issues/queries";
 import { issueChangedDims } from "../issues/surface/membership";
 import { applyIssueChange, rollbackIssueChange, invalidateStaleListKeys } from "../issues/cache-coordinator";
@@ -22,7 +22,7 @@ function item(id: string, archived = true): InboxItem {
     read: false, archived, created_at: "2026-09-01T00:00:00Z", details: null };
 }
 const active = (id: string) => item(id, false);
-const page = (items: InboxItem[], nextCursor: string | null = null): InboxPage => ({ items, nextCursor, hasMore: !!nextCursor });
+const page = (items: InboxItem[], nextCursor: string | null = null): ArchivedInboxPage => ({ items, nextCursor, hasMore: !!nextCursor });
 function setup() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
@@ -66,7 +66,7 @@ describe("archived inbox pagination", () => {
     const { qc, wrapper } = setup();
     const keys = [archivedInboxPagesOptions("ws", EMPTY_INBOX_FILTERS).queryKey,
       archivedInboxPagesOptions("ws", { ...EMPTY_INBOX_FILTERS, priorities: ["high"] }).queryKey];
-    const initial: InfiniteData<InboxPage> = { pages: [page([item("first")], "next"), page([item("target")])], pageParams: [null, "next"] };
+    const initial: InfiniteData<ArchivedInboxPage> = { pages: [page([item("first")], "next"), page([item("target")])], pageParams: [null, "next"] };
     for (const key of keys) qc.setQueryData(key, initial);
     const lookupKey = [...inboxKeys.lookup("ws"), "target"];
     qc.setQueryData(lookupKey, page([item("target")]));
@@ -74,12 +74,12 @@ describe("archived inbox pagination", () => {
     setApiInstance({ unarchiveInbox: () => new Promise((_resolve, fail) => { reject = fail; }) } as unknown as ApiClient);
     const { result, unmount } = renderHook(() => useUnarchiveInbox(), { wrapper });
     act(() => result.current.mutate("target"));
-    await waitFor(() => expect(qc.getQueryData<InboxPage>(lookupKey)?.items[0]?.archived).toBe(false));
-    for (const key of keys) expect(qc.getQueryData<InfiniteData<InboxPage>>(key)?.pages[1]?.items[0]?.archived).toBe(false);
+    await waitFor(() => expect(qc.getQueryData<ArchivedInboxPage>(lookupKey)?.items[0]?.archived).toBe(false));
+    for (const key of keys) expect(qc.getQueryData<InfiniteData<ArchivedInboxPage>>(key)?.pages[1]?.items[0]?.archived).toBe(false);
     act(() => reject(new Error("restore failed")));
     await waitFor(() => expect(result.current.isError).toBe(true));
     for (const key of keys) expect(qc.getQueryData(key)).toEqual(initial);
-    expect(qc.getQueryData<InboxPage>(lookupKey)?.items[0]?.archived).toBe(true);
+    expect(qc.getQueryData<ArchivedInboxPage>(lookupKey)?.items[0]?.archived).toBe(true);
     unmount(); qc.clear();
   });
 
@@ -89,7 +89,7 @@ describe("archived inbox pagination", () => {
     const initial = { pages: [page([item("target")])], pageParams: [null] };
     qc.setQueryData(key, initial);
     const result = applyIssueChange(qc, "ws", "target", { priority: "low" }, { changed: issueChangedDims({ priority: "low" }) });
-    expect(qc.getQueryData<InfiniteData<InboxPage>>(key)?.pages[0]?.items[0]?.issue_priority).toBe("low");
+    expect(qc.getQueryData<InfiniteData<ArchivedInboxPage>>(key)?.pages[0]?.items[0]?.issue_priority).toBe("low");
     expect(qc.getQueryState(key)?.isInvalidated).toBe(false);
     expect(result.staleKeys).toContainEqual(key);
     rollbackIssueChange(qc, "ws", "target", result);
@@ -99,9 +99,9 @@ describe("archived inbox pagination", () => {
 
   it("replaces a first page request that predates an issue projection change", async () => {
     const { qc, wrapper } = setup();
-    let resolveOld!: (value: InboxPage) => void;
+    let resolveOld!: (value: ArchivedInboxPage) => void;
     const listArchivedInboxPage = vi.fn()
-      .mockImplementationOnce(() => new Promise<InboxPage>((resolve) => { resolveOld = resolve; }))
+      .mockImplementationOnce(() => new Promise<ArchivedInboxPage>((resolve) => { resolveOld = resolve; }))
       .mockResolvedValue(page([{ ...item("target"), issue_priority: "low" }]));
     setApiInstance({ listArchivedInboxPage } as unknown as ApiClient);
     const { result, unmount } = renderHook(() => useInfiniteQuery(archivedInboxPagesOptions("ws", EMPTY_INBOX_FILTERS)), { wrapper });
@@ -120,23 +120,23 @@ describe("archived inbox pagination", () => {
   it("updates read state on later pages and invalidates server-owned filter membership on issue events", async () => {
     const { qc, wrapper } = setup();
     const key = archivedInboxPagesOptions("ws", EMPTY_INBOX_FILTERS).queryKey;
-    qc.setQueryData<InfiniteData<InboxPage>>(key, { pages: [page([item("first")], "next"), page([item("target")])], pageParams: [null, "next"] });
+    qc.setQueryData<InfiniteData<ArchivedInboxPage>>(key, { pages: [page([item("first")], "next"), page([item("target")])], pageParams: [null, "next"] });
     setApiInstance({ markInboxRead: async () => ({ ...item("target"), read: true }) } as unknown as ApiClient);
     const { result, unmount } = renderHook(() => useMarkInboxRead(), { wrapper });
     await act(() => result.current.mutateAsync("target"));
-    expect(qc.getQueryData<InfiniteData<InboxPage>>(key)?.pages[1]?.items[0]?.read).toBe(true);
+    expect(qc.getQueryData<InfiniteData<ArchivedInboxPage>>(key)?.pages[1]?.items[0]?.read).toBe(true);
     onInboxIssueStatusChanged(qc, "ws", "target", "todo");
-    expect(qc.getQueryData<InfiniteData<InboxPage>>(key)?.pages[1]?.items[0]?.issue_status).toBe("todo");
+    expect(qc.getQueryData<InfiniteData<ArchivedInboxPage>>(key)?.pages[1]?.items[0]?.issue_status).toBe("todo");
     expect(qc.getQueryState(key)?.isInvalidated).toBe(true);
     await onInboxIssueDeleted(qc, "ws", "target");
-    expect(qc.getQueryData<InfiniteData<InboxPage>>(key)?.pages[1]?.items).toEqual([]);
+    expect(qc.getQueryData<InfiniteData<ArchivedInboxPage>>(key)?.pages[1]?.items).toEqual([]);
     unmount(); qc.clear();
   });
 });
 
 describe("active inbox pagination", () => {
   const statusFiltered = { ...EMPTY_INBOX_FILTERS, statuses: ["done" as const] };
-  const twoPages = (): InfiniteData<InboxPage> => ({
+  const twoPages = (): InfiniteData<ArchivedInboxPage> => ({
     pages: [page([active("first")], "next"), page([active("target")])], pageParams: [null, "next"],
   });
 
@@ -162,7 +162,7 @@ describe("active inbox pagination", () => {
     const { qc, wrapper } = setup();
     const keys = [inboxPagesOptions("ws", EMPTY_INBOX_FILTERS).queryKey, inboxPagesOptions("ws", statusFiltered).queryKey];
     const sibling = { ...active("sibling"), issue_id: "target" };
-    const initial: InfiniteData<InboxPage> = { pages: [page([sibling, active("first")], "next"), page([active("target")])], pageParams: [null, "next"] };
+    const initial: InfiniteData<ArchivedInboxPage> = { pages: [page([sibling, active("first")], "next"), page([active("target")])], pageParams: [null, "next"] };
     for (const key of keys) qc.setQueryData(key, initial);
     const lookupKey = inboxLookupOptions("ws", "target").queryKey;
     qc.setQueryData(lookupKey, page([active("target")]));
@@ -170,16 +170,16 @@ describe("active inbox pagination", () => {
     setApiInstance({ archiveInbox: () => new Promise((_resolve, fail) => { reject = fail; }) } as unknown as ApiClient);
     const { result, unmount } = renderHook(() => useArchiveInbox(), { wrapper });
     act(() => result.current.mutate("target"));
-    await waitFor(() => expect(qc.getQueryData<InboxPage>(lookupKey)?.items[0]?.archived).toBe(true));
+    await waitFor(() => expect(qc.getQueryData<ArchivedInboxPage>(lookupKey)?.items[0]?.archived).toBe(true));
     for (const key of keys) {
-      const pages = qc.getQueryData<InfiniteData<InboxPage>>(key)?.pages;
+      const pages = qc.getQueryData<InfiniteData<ArchivedInboxPage>>(key)?.pages;
       expect(pages?.[0]?.items.map((row) => row.archived)).toEqual([true, false]);
       expect(pages?.[1]?.items[0]?.archived).toBe(true);
     }
     act(() => reject(new Error("archive failed")));
     await waitFor(() => expect(result.current.isError).toBe(true));
     for (const key of keys) expect(qc.getQueryData(key)).toEqual(initial);
-    expect(qc.getQueryData<InboxPage>(lookupKey)?.items[0]?.archived).toBe(false);
+    expect(qc.getQueryData<ArchivedInboxPage>(lookupKey)?.items[0]?.archived).toBe(false);
     unmount(); qc.clear();
   });
 
@@ -193,10 +193,10 @@ describe("active inbox pagination", () => {
     } as unknown as ApiClient);
     const read = renderHook(() => useMarkInboxRead(), { wrapper });
     await act(() => read.result.current.mutateAsync("target"));
-    expect(qc.getQueryData<InfiniteData<InboxPage>>(key)?.pages.map((p) => p.items[0]?.read)).toEqual([false, true]);
+    expect(qc.getQueryData<InfiniteData<ArchivedInboxPage>>(key)?.pages.map((p) => p.items[0]?.read)).toEqual([false, true]);
     const all = renderHook(() => useMarkAllInboxRead(), { wrapper });
     await act(() => all.result.current.mutateAsync());
-    expect(qc.getQueryData<InfiniteData<InboxPage>>(key)?.pages.map((p) => p.items[0]?.read)).toEqual([true, true]);
+    expect(qc.getQueryData<InfiniteData<ArchivedInboxPage>>(key)?.pages.map((p) => p.items[0]?.read)).toEqual([true, true]);
     read.unmount(); all.unmount(); qc.clear();
   });
 
@@ -212,9 +212,9 @@ describe("active inbox pagination", () => {
     qc.setQueryData(facets, { statuses: { done: 2 }, priorities: { high: 2 }, actors: {}, unreadCount: 2 });
     const result = applyIssueChange(qc, "ws", "target", { status: "todo" }, { changed: issueChangedDims({ status: "todo" }) });
     for (const key of [unfiltered, byStatus, byPriority]) {
-      expect(qc.getQueryData<InfiniteData<InboxPage>>(key)?.pages[1]?.items[0]?.issue_status).toBe("todo");
+      expect(qc.getQueryData<InfiniteData<ArchivedInboxPage>>(key)?.pages[1]?.items[0]?.issue_status).toBe("todo");
     }
-    expect(qc.getQueryData<InboxPage>(lookup)?.items[0]?.issue_status).toBe("todo");
+    expect(qc.getQueryData<ArchivedInboxPage>(lookup)?.items[0]?.issue_status).toBe("todo");
     expect(result.staleKeys).toContainEqual(byStatus);
     expect(result.staleKeys).toContainEqual(facets);
     expect(result.staleKeys).not.toContainEqual(unfiltered);
@@ -222,7 +222,7 @@ describe("active inbox pagination", () => {
     expect(result.staleKeys).not.toContainEqual(lookup);
     rollbackIssueChange(qc, "ws", "target", result);
     expect(qc.getQueryData(byStatus)).toEqual(twoPages());
-    expect(qc.getQueryData<InboxPage>(lookup)?.items[0]?.issue_status).toBe("done");
+    expect(qc.getQueryData<ArchivedInboxPage>(lookup)?.items[0]?.issue_status).toBe("done");
     qc.clear();
   });
 
@@ -280,7 +280,7 @@ describe("active inbox pagination", () => {
     const fromRow = applyIssueChange(qc, "ws", "target", { ...titleEdit, priority: "low" }, { changed: noFieldMoved });
     expect(fromRow.staleKeys).toContainEqual(byPriority);
     expect(fromRow.staleKeys).not.toContainEqual(byStatus);
-    expect(qc.getQueryData<InfiniteData<InboxPage>>(byPriority)?.pages[1]?.items[0]?.issue_priority).toBe("low");
+    expect(qc.getQueryData<InfiniteData<ArchivedInboxPage>>(byPriority)?.pages[1]?.items[0]?.issue_priority).toBe("low");
     // The issue itself, for an issue with no loaded inbox row.
     qc.setQueryData(issueKeys.detail("ws", "elsewhere"), { id: "elsewhere", status: "done", priority: "high" } as Issue);
     const fromIssue = applyIssueChange(qc, "ws", "elsewhere", { ...titleEdit, priority: "urgent" }, { changed: noFieldMoved });
@@ -292,10 +292,10 @@ describe("active inbox pagination", () => {
   it("re-reads unfiltered pages when an issue change lands during a next-page request", async () => {
     const { qc, wrapper } = setup();
     const key = inboxPagesOptions("ws", EMPTY_INBOX_FILTERS).queryKey;
-    let releaseNext!: (value: InboxPage) => void;
+    let releaseNext!: (value: ArchivedInboxPage) => void;
     const listInboxPage = vi.fn()
       .mockResolvedValueOnce(page([active("target")], "next"))
-      .mockImplementationOnce(() => new Promise<InboxPage>((resolve) => { releaseNext = resolve; }))
+      .mockImplementationOnce(() => new Promise<ArchivedInboxPage>((resolve) => { releaseNext = resolve; }))
       .mockImplementation(async (_filters: unknown, options: { cursor?: string | null }) =>
         options.cursor ? page([active("second")]) : page([{ ...active("target"), issue_status: "todo" }], "next"));
     setApiInstance({ listInboxPage } as unknown as ApiClient);
@@ -311,20 +311,20 @@ describe("active inbox pagination", () => {
     // old status back: the request is cancelled and the loaded page re-read.
     await act(async () => releaseNext(page([active("second")])));
     await waitFor(() => expect(qc.getQueryState(key)?.fetchStatus).toBe("idle"));
-    expect(qc.getQueryData<InfiniteData<InboxPage>>(key)?.pages.map((p) => p.items[0]?.issue_status)).toEqual(["todo"]);
+    expect(qc.getQueryData<InfiniteData<ArchivedInboxPage>>(key)?.pages.map((p) => p.items[0]?.issue_status)).toEqual(["todo"]);
     expect(listInboxPage).toHaveBeenCalledTimes(3);
     unmount(); qc.clear();
   });
 
   it("leaves a running refetch of unfiltered pages alone on an issue change", async () => {
     const { qc, wrapper } = setup();
-    let releaseRefetch!: (value: InboxPage) => void;
+    let releaseRefetch!: (value: ArchivedInboxPage) => void;
     let refetchSignal: AbortSignal | undefined;
     const listInboxPage = vi.fn()
       .mockResolvedValueOnce(page([active("target")]))
       .mockImplementationOnce((_filters: unknown, options: { signal?: AbortSignal }) => {
         refetchSignal = options.signal;
-        return new Promise<InboxPage>((resolve) => { releaseRefetch = resolve; });
+        return new Promise<ArchivedInboxPage>((resolve) => { releaseRefetch = resolve; });
       });
     setApiInstance({ listInboxPage } as unknown as ApiClient);
     const { result, unmount } = renderHook(() => useInfiniteQuery(inboxPagesOptions("ws", EMPTY_INBOX_FILTERS)), { wrapper });
@@ -360,16 +360,16 @@ describe("active inbox pagination", () => {
     const key = inboxPagesOptions("ws", EMPTY_INBOX_FILTERS).queryKey;
     qc.setQueryData(key, twoPages());
     await onInboxIssueDeleted(qc, "ws", "target");
-    expect(qc.getQueryData<InfiniteData<InboxPage>>(key)?.pages.map((p) => p.items.map((row) => row.id))).toEqual([["first"], []]);
+    expect(qc.getQueryData<InfiniteData<ArchivedInboxPage>>(key)?.pages.map((p) => p.items.map((row) => row.id))).toEqual([["first"], []]);
     expect(qc.getQueryState(key)?.isInvalidated).toBe(true);
     qc.clear();
   });
 
   it("replaces a first filtered page request that predates an issue change", async () => {
     const { qc, wrapper } = setup();
-    let resolveOld!: (value: InboxPage) => void;
+    let resolveOld!: (value: ArchivedInboxPage) => void;
     const listInboxPage = vi.fn()
-      .mockImplementationOnce(() => new Promise<InboxPage>((resolve) => { resolveOld = resolve; }))
+      .mockImplementationOnce(() => new Promise<ArchivedInboxPage>((resolve) => { resolveOld = resolve; }))
       .mockResolvedValue(page([]));
     setApiInstance({ listInboxPage } as unknown as ApiClient);
     const { result, unmount } = renderHook(() => useInfiniteQuery(inboxPagesOptions("ws", statusFiltered)), { wrapper });

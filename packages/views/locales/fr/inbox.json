@@ -105,7 +105,7 @@
     "unarchived": "Notification restaurée"
   },
   "errors": {
-    "lookup_failed": "Échec du chargement de la notification liée",
+    "archived_lookup_failed": "Échec du chargement de la notification liée",
     "source_context_retry_failed": "Impossible de réessayer avec le contexte d'origine",
     "source_context_retry_unavailable": "Ce contexte ne peut plus être réutilisé pour une nouvelle tentative. Recommencez depuis le point de branchement.",
     "mark_read_failed": "Échec du marquage comme lu",

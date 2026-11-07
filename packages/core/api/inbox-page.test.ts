@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient } from "./client";
-import { EMPTY_INBOX_FILTERS, type InboxFilters } from "../inbox/filter-store";
+import { EMPTY_INBOX_FILTERS } from "../inbox/filter-store";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -62,14 +62,5 @@ describe("active inbox page API", () => {
       respond(body);
       await expect(api.getInboxFacets(EMPTY_INBOX_FILTERS)).rejects.toThrow("Invalid inbox facets response");
     }
-  });
-
-  it("never sends the active view's idle selection to the archive's facets", async () => {
-    const fetch = respond({ statuses: {}, priorities: {}, actors: {}, unread_count: 0 });
-    const idle: InboxFilters = { ...EMPTY_INBOX_FILTERS, idleOnly: true };
-    await new ApiClient("https://api.example.test").getArchivedInboxFacets(idle);
-    const url = new URL(fetch.mock.calls[0]![0]);
-    expect(url.pathname).toBe("/api/inbox/archived/facets");
-    expect(Object.fromEntries(url.searchParams)).toEqual({});
   });
 });

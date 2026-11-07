@@ -6,9 +6,9 @@ import { toast } from "sonner";
 import { setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
 import { EMPTY_INBOX_FILTERS, useInboxFilterStore, type InboxFilters } from "@multica/core/inbox/filter-store";
-import { archivedInboxLookupOptions, inboxKeys, inboxLookupOptions, inboxPagesOptions } from "@multica/core/inbox/queries";
+import { archivedInboxLookupOptions, inboxKeys, inboxPagesOptions } from "@multica/core/inbox/queries";
 import { onInboxInvalidate, onInboxIssueDeleted, patchInboxIssueProjection } from "@multica/core/inbox/ws-updaters";
-import type { InboxPage as InboxPageData } from "@multica/core/types/inbox";
+import type { ArchivedInboxPage as InboxPageData } from "@multica/core/types/inbox";
 import type { AgentTask, InboxItem } from "@multica/core/types";
 import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { InboxPage } from "./inbox-page";
@@ -392,8 +392,8 @@ it.each(["status", "priority", "actor"] as const)("still applies the %s filter t
 });
 
 // A server that pages two groups per request and applies the idle dimension
-// to pages and lookups alike; `busy` holds the issues an agent works on. The
-// task snapshot starts out matching it, as when another page already read it.
+// when asked; `busy` holds the issues an agent works on. The task snapshot
+// starts out matching it, as when another page already read it.
 function idleServer(rows: InboxItem[], busy: Set<string>) {
   const isIdle = (row: InboxItem) => !!row.issue_id && !busy.has(row.issue_id);
   const listInboxPage = vi.fn(async (filters: InboxFilters, options: { groupId?: string }) => {
@@ -480,63 +480,37 @@ it("re-reads a retained idle cache after the task finished while InboxPage was u
   await waitFor(() => expect(screen.queryByText("inbox-b")).toBeInTheDocument());
 });
 
-it("lists a row the server re-read as idle even when a task event lands during the first snapshot load", async () => {
-  // TanStack answers an invalidation during a first load with the request
-  // already in flight, so the snapshot can describe the state before the event.
+// Both first requests read the server before a task ended. TanStack answers
+// the task event's invalidation during the snapshot's first load with the
+// request already in flight, so the snapshot shows the busy issues from before
+// the event and never changes again; the idle page must be read again anyway.
+it.each(["page-first", "snapshot-first"])("lists a row the server re-read as idle when a task ends during the first loads (%s)", async (order) => {
   const store = useInboxFilterStore.getState();
   store.toggleUnreadOnly("workspace-1");
   store.toggleIdleOnly("workspace-1");
   const rows = [item({ read: true }), item({ id: "inbox-b", issue_id: "issue-b", read: true })];
   let busy = true;
-  const gate = deferred<AgentTask[]>();
+  const firstPage = deferred<InboxPageData>();
+  const firstSnapshot = deferred<AgentTask[]>();
   const task = { id: "task-b", agent_id: "agent-1", issue_id: "issue-b", status: "running" } as AgentTask;
-  const getAgentTaskSnapshot = vi.fn(() => gate.promise);
-  const listInboxPage = vi.fn(async () => page(rows.filter((row) => !busy || row.issue_id !== "issue-b")));
+  const listInboxPage = vi.fn(async () => listInboxPage.mock.calls.length === 1
+    ? firstPage.promise : page(rows.filter((row) => !busy || row.issue_id !== "issue-b")));
+  const getAgentTaskSnapshot = vi.fn(() => firstSnapshot.promise);
   setApiInstance({ listInboxPage, getAgentTaskSnapshot, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
   renderPage();
-  await screen.findByText("inbox-a");
-  expect(getAgentTaskSnapshot).toHaveBeenCalledOnce();
-  // The server finishes the task; use the real task-prefix invalidation operation.
-  busy = false;
-  await act(async () => {
-    const refresh = qc.invalidateQueries({ queryKey: agentTaskSnapshotOptions("workspace-1").queryKey });
-    gate.resolve([task]); // Request captured the pre-completion database state.
-    await refresh;
-  });
-  await waitFor(() => expect(listInboxPage).toHaveBeenCalledTimes(2));
-  expect(getAgentTaskSnapshot).toHaveBeenCalledOnce();
-  await waitFor(() => expect(screen.queryByText("inbox-b")).toBeInTheDocument());
-});
-
-it("lists a row the server re-read as idle when the first snapshot answers before the first page, both from before a task event", async () => {
-  // Both first requests read the server before the task ended. The snapshot
-  // absorbs the task event's invalidation and answers first, so the busy
-  // issues it shows never change again; the page's first load must restart.
-  const store = useInboxFilterStore.getState();
-  store.toggleUnreadOnly("workspace-1");
-  store.toggleIdleOnly("workspace-1");
-  const rows = [item({ read: true }), item({ id: "inbox-b", issue_id: "issue-b", read: true })];
-  let busy = true;
-  const snapshotGate = deferred<AgentTask[]>();
-  const firstPage = deferred<InboxPageData>();
-  const task = { id: "task-b", agent_id: "agent-1", issue_id: "issue-b", status: "running" } as AgentTask;
-  let pageCalls = 0;
-  const listInboxPage = vi.fn(async () => (++pageCalls === 1 ? firstPage.promise
-    : page(rows.filter((row) => !busy || row.issue_id !== "issue-b"))));
-  setApiInstance({ listInboxPage, getAgentTaskSnapshot: () => snapshotGate.promise,
-    getInboxUnreadSummary: async () => [],
-  } as unknown as ApiClient);
-  renderPage();
   await waitFor(() => expect(listInboxPage).toHaveBeenCalledOnce());
+  await waitFor(() => expect(getAgentTaskSnapshot).toHaveBeenCalledOnce());
   busy = false;
+  if (order === "page-first") await act(async () => firstPage.resolve(page([rows[0]!])));
   await act(async () => {
     const refresh = qc.invalidateQueries({ queryKey: agentTaskSnapshotOptions("workspace-1").queryKey });
-    snapshotGate.resolve([task]);
+    firstSnapshot.resolve([task]);
     await refresh;
   });
-  await act(async () => firstPage.resolve(page([rows[0]!])));
+  if (order === "snapshot-first") await act(async () => firstPage.resolve(page([rows[0]!])));
 
   await waitFor(() => expect(screen.queryByText("inbox-b")).toBeInTheDocument());
+  expect(getAgentTaskSnapshot).toHaveBeenCalledOnce();
   expect(listInboxPage).toHaveBeenCalledTimes(2);
 });
 
@@ -621,57 +595,6 @@ it("clears a selected notification without an issue under the idle filter instea
   expect(replace).not.toHaveBeenCalledWith("/acme/issues/inbox-system");
 });
 
-// Each mount asks the server again; nothing remembered from an earlier visit
-// stands in for that, since the caches it described may be gone.
-it.each(["page-first", "snapshot-first"])("re-reads the idle inbox on return after its caches were collected and a task ended during the new first loads (%s)", async (order) => {
-  keepCaches();
-  const store = useInboxFilterStore.getState();
-  store.toggleUnreadOnly("workspace-1");
-  store.toggleIdleOnly("workspace-1");
-  const rows = [item({ read: true }), item({ id: "inbox-b", issue_id: "issue-b", read: true })];
-  idleServer(rows, new Set(["issue-b"]));
-  const mounted = renderPage();
-  await screen.findByText("inbox-a");
-  await act(() => new Promise<void>((resolve) => { setTimeout(resolve, 0); }));
-  // Neither query is observed while away. Advance their production GC delays:
-  // five minutes for the snapshot and ten minutes for inbox pages.
-  vi.useFakeTimers();
-  mounted.unmount();
-  await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1); });
-  vi.useRealTimers();
-  const snapshotKey = agentTaskSnapshotOptions("workspace-1").queryKey;
-  expect(qc.getQueryData(snapshotKey)).toBeUndefined();
-  expect(qc.getQueryCache().findAll({ queryKey: inboxKeys.list("workspace-1") })).toHaveLength(0);
-
-  let busy = true;
-  const firstPage = deferred<InboxPageData>();
-  const firstSnapshot = deferred<AgentTask[]>();
-  const task = { id: "task-b", agent_id: "agent-1", issue_id: "issue-b", status: "running" } as AgentTask;
-  const listInboxPage = vi.fn(async () => listInboxPage.mock.calls.length === 1
-    ? firstPage.promise : page(rows.filter((row) => !busy || row.issue_id !== "issue-b")));
-  const getAgentTaskSnapshot = vi.fn(() => firstSnapshot.promise);
-  setApiInstance({ listInboxPage, getAgentTaskSnapshot, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
-  renderPage();
-  await waitFor(() => expect(listInboxPage).toHaveBeenCalledOnce());
-  await waitFor(() => expect(getAgentTaskSnapshot).toHaveBeenCalledOnce());
-  // Both requests read B busy. B finishes while the snapshot's new first
-  // request is in flight, which absorbs the invalidation; no inbox event.
-  busy = false;
-  if (order === "page-first") {
-    await act(async () => firstPage.resolve(page([rows[0]!])));
-  }
-  await act(async () => {
-    const refresh = qc.invalidateQueries({ queryKey: snapshotKey });
-    firstSnapshot.resolve([task]);
-    await refresh;
-  });
-  if (order === "snapshot-first") {
-    await act(async () => firstPage.resolve(page([rows[0]!])));
-  }
-  expect(getAgentTaskSnapshot).toHaveBeenCalledOnce();
-  await waitFor(() => expect(screen.queryByText("inbox-b")).toBeInTheDocument());
-});
-
 it.each([false, true])("keeps a deep link's selection while its lookup has no answer yet (optimistic read on another row: %s)", async (markOtherRow) => {
   // Marking a row read cancels every inbox request, a lookup still on its
   // first load included, and patches every inbox cache. Until the write
@@ -682,8 +605,6 @@ it.each([false, true])("keeps a deep link's selection while its lookup has no an
   const a = item();
   const b = item({ id: "inbox-b", issue_id: "issue-b", read: true });
   const c = item({ id: "inbox-c", issue_id: "issue-c", read: true });
-  // An earlier idle-filtered lookup that missed while C was busy; C is idle now.
-  qc.setQueryData(inboxLookupOptions("workspace-1", "issue-c", { ...EMPTY_INBOX_FILTERS, idleOnly: true }).queryKey, page([]));
   qc.setQueryData(agentTaskSnapshotOptions("workspace-1").queryKey, []);
   const lookupGate = deferred<InboxPageData>();
   const writeGate = deferred<InboxItem>();
@@ -710,7 +631,7 @@ it.each([false, true])("keeps a deep link's selection while its lookup has no an
   expect(replace).not.toHaveBeenCalled();
 });
 
-it.each([false, true])("keeps the detail of an idle row opened on a return visit when an agent starts on it (opened before the mount's re-read settles: %s)", async (openBeforeRefresh) => {
+it("keeps the detail of an idle row opened on a return visit when an agent starts on it before the mount's re-read settles", async () => {
   keepCaches();
   useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
   useInboxFilterStore.getState().toggleIdleOnly("workspace-1");
@@ -731,7 +652,6 @@ it.each([false, true])("keeps the detail of an idle row opened on a return visit
   setApiInstance({ listInboxPage, getAgentTaskSnapshot: async () => [], getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
   renderPage();
   await waitFor(() => expect(listInboxPage).toHaveBeenCalledOnce());
-  if (!openBeforeRefresh) await act(async () => mountReread.resolve(page([a, b])));
   fireEvent.click(screen.getByText("inbox-a"));
   const detail = await screen.findByTestId("detail");
   expect(detail).toHaveTextContent("issue-a");
@@ -742,29 +662,13 @@ it.each([false, true])("keeps the detail of an idle row opened on a return visit
   });
   await waitFor(() => expect(listInboxPage.mock.calls.filter(([, options]) => !options.groupId).length).toBeGreaterThan(1));
   await act(async () => mountReread.resolve(page([a, b])));
+  const pageRows = () => qc.getQueryData(inboxPagesOptions("workspace-1", idle).queryKey)?.pages.flatMap((p) => p.items);
+  await waitFor(() => expect(pageRows()?.map((row) => row.id)).toEqual(["inbox-b"]));
 
+  expect(screen.getByText("inbox-a")).toBeInTheDocument();
   expect(screen.queryByTestId("detail")).toBe(detail);
   expect(detailUnmounted).not.toHaveBeenCalled();
   expect(replace).not.toHaveBeenLastCalledWith("/acme/inbox");
-});
-
-it("keeps the selection on a failed lookup without a request loop", async () => {
-  keepCaches();
-  useInboxFilterStore.getState().toggleUnreadOnly("workspace-1");
-  useInboxFilterStore.getState().toggleIdleOnly("workspace-1");
-  const listInboxPage = vi.fn(async (_filters: InboxFilters, options: { groupId?: string }) => {
-    if (options.groupId) throw new Error("lookup offline");
-    return page([item({ read: true })]);
-  });
-  setApiInstance({ listInboxPage, getAgentTaskSnapshot: async () => { throw new Error("snapshot offline"); }, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
-  searchParams = new URLSearchParams("issue=issue-c");
-  const mounted = renderPage();
-  await waitFor(() => expect(qc.getQueryState(inboxLookupOptions("workspace-1", "issue-c").queryKey)?.status).toBe("error"));
-  expect(replace).not.toHaveBeenCalled();
-  const calls = listInboxPage.mock.calls.length;
-  mounted.rerender(<QueryClientProvider client={qc}><InboxPage /></QueryClientProvider>);
-  await act(() => new Promise<void>((resolve) => { setTimeout(resolve, 0); }));
-  expect(listInboxPage).toHaveBeenCalledTimes(calls);
 });
 
 it("does not re-read the idle pages when the task snapshot changes order but not its busy issues", async () => {

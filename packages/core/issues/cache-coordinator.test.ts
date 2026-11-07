@@ -13,7 +13,7 @@ import { EMPTY_INBOX_FILTERS } from "../inbox/filter-store";
 import { archivedInboxPagesOptions, inboxPagesOptions } from "../inbox/queries";
 import type {
   InboxItem,
-  InboxPage,
+  ArchivedInboxPage,
   Issue,
   IssueTableRowsResponse,
   ListIssuesCache,
@@ -132,12 +132,12 @@ const myAssigneeGroupsUpdatedKey = issueKeys.myAssigneeGroups(WS_ID, "all", {
   ...updatedSort,
 });
 
-function inboxPages(items: InboxItem[]): InfiniteData<InboxPage> {
+function inboxPages(items: InboxItem[]): InfiniteData<ArchivedInboxPage> {
   return { pages: [{ items, nextCursor: null, hasMore: false }], pageParams: [null] };
 }
 
 function inboxRows(qc: QueryClient, key: typeof inboxKey | typeof archivedInboxKey) {
-  return qc.getQueryData<InfiniteData<InboxPage>>(key)?.pages.flatMap((p) => p.items);
+  return qc.getQueryData<InfiniteData<ArchivedInboxPage>>(key)?.pages.flatMap((p) => p.items);
 }
 
 function makeIssue(idx: number, overrides: Partial<Issue> = {}): Issue {

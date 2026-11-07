@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
-import type { InboxItem, InboxPage, InboxWorkspaceUnread } from "../types";
+import type { InboxItem, ArchivedInboxPage, InboxWorkspaceUnread } from "../types";
 import { EMPTY_INBOX_FILTERS } from "./filter-store";
 import { useMarkInboxRead, useMarkInboxUnread, useUnarchiveInbox } from "./mutations";
 import {
@@ -62,7 +62,7 @@ const ARCHIVED_KEY = archivedInboxPagesOptions(
   EMPTY_INBOX_FILTERS,
 ).queryKey;
 
-function pages(items: InboxItem[]): InfiniteData<InboxPage> {
+function pages(items: InboxItem[]): InfiniteData<ArchivedInboxPage> {
   return {
     pages: [{ items, nextCursor: null, hasMore: false }],
     pageParams: [null],

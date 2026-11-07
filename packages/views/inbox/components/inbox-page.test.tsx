@@ -6,8 +6,8 @@ import type { AgentTask, InboxItem } from "@multica/core/types";
 import { useInboxFilterStore } from "@multica/core/inbox/filter-store";
 import { InboxPage } from "./inbox-page";
 
-const onInboxBusyIssuesChange = vi.hoisted(() => vi.fn());
-vi.mock("@multica/core/inbox/ws-updaters", () => ({ onInboxBusyIssuesChange }));
+const refreshInboxIdleQueries = vi.hoisted(() => vi.fn());
+vi.mock("@multica/core/inbox/ws-updaters", () => ({ refreshInboxIdleQueries }));
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -17,9 +17,9 @@ vi.mock("react-resizable-panels", () => ({
   useDefaultLayout: () => ({ defaultLayout: undefined, onLayoutChanged: vi.fn() }),
 }));
 
-// The page runs a paged query per view — the active list and the archived one
-// — plus a deep-link lookup. They are told apart by the queryKey their options
-// carry, so each test can stock the two lists independently.
+// The page runs two queries — the active list and the archived one. They are
+// told apart by the queryKey their options carry, so each test can stock the
+// two lists independently.
 const listData: { active: InboxItem[]; archived: InboxItem[]; lookup?: InboxItem[]; tasks: AgentTask[] } = {
   active: [],
   archived: [],
@@ -33,7 +33,7 @@ const pageState = {
   isFetchingNextPage: false, isFetchNextPageError: false,
   fetchNextPage: vi.fn(), refetch: vi.fn(),
 };
-const queryClient = vi.hoisted(() => ({ setQueryData: vi.fn() }));
+const queryClient = vi.hoisted(() => ({ setQueryData: vi.fn(), getQueryState: vi.fn(), invalidateQueries: vi.fn() }));
 vi.mock("@tanstack/react-query", () => ({
   queryOptions: (options: unknown) => options,
   useQueryClient: () => queryClient,
@@ -294,7 +294,7 @@ function reset() {
   listData.archived = [];
   listData.lookup = undefined;
   listData.tasks = [];
-  onInboxBusyIssuesChange.mockClear();
+  refreshInboxIdleQueries.mockClear();
   lookupState.isLoading = false;
   lookupState.isError = false;
   lookupState.refetch.mockClear();
@@ -849,7 +849,6 @@ describe("InboxPage", () => {
     expect(screen.getByTestId("row")).toHaveTextContent("inbox-a");
     expect(replace).not.toHaveBeenCalledWith("/acme/inbox");
   });
-
 
   it("keeps an explicitly unread row unread while it stays open", () => {
     // Without the guard the auto-read effect fires on the very next commit and

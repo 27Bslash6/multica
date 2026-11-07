@@ -37,7 +37,7 @@ import {
 } from "../inbox/ws-updaters";
 import type {
   InboxItem,
-  InboxPage,
+  ArchivedInboxPage,
   Issue,
   ListIssuesCache,
   TimelineEntry,
@@ -108,11 +108,11 @@ function makeInboxItem(
 // The unfiltered active Inbox as the client caches it: pages of rows.
 const inboxPagesKey = inboxPagesOptions(WS_ID, EMPTY_INBOX_FILTERS).queryKey;
 
-function lastInboxPage(items: InboxItem[]): InboxPage {
+function lastInboxPage(items: InboxItem[]): ArchivedInboxPage {
   return { items, nextCursor: null, hasMore: false };
 }
 
-function loadedInboxPages(items: InboxItem[]): InfiniteData<InboxPage> {
+function loadedInboxPages(items: InboxItem[]): InfiniteData<ArchivedInboxPage> {
   return { pages: [lastInboxPage(items)], pageParams: [null] };
 }
 

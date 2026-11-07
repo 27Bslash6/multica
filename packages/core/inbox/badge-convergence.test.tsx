@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
 import { createQueryClient } from "../query-client";
-import type { InboxItem, InboxPage, InboxWorkspaceUnread } from "../types";
+import type { InboxItem, ArchivedInboxPage, InboxWorkspaceUnread } from "../types";
 import { EMPTY_INBOX_FILTERS } from "./filter-store";
 import { useMarkInboxRead } from "./mutations";
 import {
@@ -109,7 +109,7 @@ class FakeServer {
   }
 
   // One issue group per row, newest first. The fixture never fills a page.
-  page(): InboxPage {
+  page(): ArchivedInboxPage {
     return { items: deduplicateInboxItems(this.list()), nextCursor: null, hasMore: false };
   }
 

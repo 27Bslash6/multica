@@ -1,12 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { api } from "../api";
-import { inboxKeys, mapInboxCache, patchInboxCaches, type InboxCache } from "./queries";
+import { inboxKeys, mapArchivedInboxCache, patchInboxCaches, type ArchivedInboxCache } from "./queries";
 import { onInboxInvalidate, onInboxSummaryInvalidate } from "./ws-updaters";
 import { useWorkspaceId } from "../hooks";
 import type { InboxItem } from "../types";
 
-type InboxCacheSnapshot = [QueryKey, InboxCache | undefined][];
+type InboxCacheSnapshot = [QueryKey, ArchivedInboxCache | undefined][];
 
 function restoreInboxCaches(qc: QueryClient, snapshot: InboxCacheSnapshot | undefined) {
   for (const [key, data] of snapshot ?? []) qc.setQueryData(key, data);
@@ -16,8 +16,8 @@ function restoreInboxCaches(qc: QueryClient, snapshot: InboxCacheSnapshot | unde
 // and unarchive act on the whole issue group, and the row may sit on any page.
 function findInboxIssueId(qc: QueryClient, prefix: QueryKey, id: string): string | null | undefined {
   let issueId: string | null | undefined;
-  for (const [, data] of qc.getQueriesData<InboxCache>({ queryKey: prefix })) {
-    if (data) mapInboxCache(data, (items) => {
+  for (const [, data] of qc.getQueriesData<ArchivedInboxCache>({ queryKey: prefix })) {
+    if (data) mapArchivedInboxCache(data, (items) => {
       issueId ??= items.find((item) => item.id === id)?.issue_id;
       return items;
     });

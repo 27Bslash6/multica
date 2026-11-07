@@ -81,12 +81,15 @@ export function InboxFilterMenu({
   );
   const statusOptions = useStatusOptions(wsId, inboxStatusKeys);
   // An idle selection kept from the active view stays dormant in the archive.
-  const activeCount = inboxFilterCount(archived ? inboxFiltersForArchive(filters) : filters);
+  const effectiveFilters = useMemo(
+    () => (archived ? inboxFiltersForArchive(filters) : filters),
+    [filters, archived],
+  );
+  const activeCount = inboxFilterCount(effectiveFilters);
 
   // Counts are faceted: every count respects the other active dimensions while
   // ignoring its own, so each number says how many rows selecting that value
-  // can actually reveal. The loaded pages cannot answer that, so the server
-  // counts the whole view.
+  // can actually reveal.
   const unreadCount = facets?.unreadCount ?? 0;
   const idleCount = facets?.idleCount ?? 0;
   const statuses = new Map(Object.entries(facets?.statuses ?? {}));
@@ -139,7 +142,7 @@ export function InboxFilterMenu({
           <Button variant="ghost" size="sm" onClick={() => { void facetsQuery.refetch(); }}>{t(($) => $.list.retry)}</Button>
         </div>}
         <DropdownMenuCheckboxItem
-          checked={filters.unreadOnly}
+          checked={effectiveFilters.unreadOnly}
           onCheckedChange={() => toggleUnreadOnly(wsId)}
         >
           <Mail className="size-3.5" />
@@ -153,7 +156,7 @@ export function InboxFilterMenu({
         {/* The archive is filtered server-side, which has no idle dimension. */}
         {!archived && (
           <DropdownMenuCheckboxItem
-            checked={filters.idleOnly}
+            checked={effectiveFilters.idleOnly}
             onCheckedChange={() => toggleIdleOnly(wsId)}
           >
             <BotOff className="size-3.5" />
@@ -172,15 +175,15 @@ export function InboxFilterMenu({
             <DropdownMenuSubTrigger>
               <UserRound className="size-3.5" />
               <span className="flex-1">{t(($) => $.filters.from)}</span>
-              {filters.actors.length > 0 && (
+              {effectiveFilters.actors.length > 0 && (
                 <span className="text-caption font-medium text-primary">
-                  {filters.actors.length}
+                  {effectiveFilters.actors.length}
                 </span>
               )}
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="w-auto min-w-48">
               {actorOptions.map((option) => {
-                const checked = filters.actors.includes(option.key);
+                const checked = effectiveFilters.actors.includes(option.key);
                 const count = actors.get(option.key) ?? 0;
                 return (
                   <DropdownMenuCheckboxItem
@@ -214,15 +217,15 @@ export function InboxFilterMenu({
           <DropdownMenuSubTrigger>
             <CircleDot className="size-3.5" />
             <span className="flex-1">{t(($) => $.filters.status)}</span>
-            {filters.statuses.length > 0 && (
+            {effectiveFilters.statuses.length > 0 && (
               <span className="text-caption font-medium text-primary">
-                {filters.statuses.length}
+                {effectiveFilters.statuses.length}
               </span>
             )}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-auto min-w-48">
             {statusOptions.map((option) => {
-              const checked = filters.statuses.includes(option.key);
+              const checked = effectiveFilters.statuses.includes(option.key);
               const count = statuses.get(option.key) ?? 0;
               return (
                 <DropdownMenuCheckboxItem
@@ -253,15 +256,15 @@ export function InboxFilterMenu({
           <DropdownMenuSubTrigger>
             <SignalHigh className="size-3.5" />
             <span className="flex-1">{t(($) => $.filters.priority)}</span>
-            {filters.priorities.length > 0 ? (
+            {effectiveFilters.priorities.length > 0 ? (
               <span className="text-caption font-medium text-primary">
-                {filters.priorities.length}
+                {effectiveFilters.priorities.length}
               </span>
             ) : null}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-auto min-w-44">
             {PRIORITY_DISPLAY_ORDER.map((priority) => {
-              const checked = filters.priorities.includes(priority);
+              const checked = effectiveFilters.priorities.includes(priority);
               const count = priorities.get(priority) ?? 0;
               return (
                 <DropdownMenuCheckboxItem
