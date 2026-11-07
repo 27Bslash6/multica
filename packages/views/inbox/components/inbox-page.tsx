@@ -42,8 +42,6 @@ import {
   useArchiveCompletedInbox,
   useRetrySourceContextQuickCreate,
 } from "@multica/core/inbox/mutations";
-import { refreshInboxIdleQueries } from "@multica/core/inbox/ws-updaters";
-import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import {
   filterInboxItems,
   inboxFiltersForArchive,
@@ -53,7 +51,6 @@ import {
 } from "@multica/core/inbox/filter-store";
 
 import { IssueDetail, issueHighlightMementoKey } from "../../issues/components/issue-detail";
-import { deriveIssueSurfaceActivity } from "../../issues/surface/activity";
 import { ActionShortcutKeycaps } from "../../common/shortcut-keycaps";
 import { useRegisterCommandBarContext } from "../../search/register-context";
 import { IssuePeekHost } from "../../issues/components/issue-peek";
@@ -99,6 +96,7 @@ import { useListColumnCollapsed } from "../../layout/app-shell-context";
 import { ListColumn } from "../../layout/list-column";
 import { useTimeAgo } from "./inbox-list-item";
 import { InboxList } from "./inbox-list";
+import { useInboxIdleRefresh } from "./use-inbox-idle-refresh";
 import { InboxFilterMenu } from "./inbox-filter-menu";
 import { InboxContextMenuProvider } from "./inbox-context-menu";
 import { ARCHIVED_VIEW_PARAM, type InboxView } from "./inbox-view";
@@ -460,19 +458,7 @@ export function InboxPage() {
     if (!unreadOnlyActive) pinnedUnreadKeyRef.current = null;
   }, [unreadOnlyActive]);
 
-  // The task snapshot only says when to ask the server again: on this mount's
-  // first snapshot, and whenever the issues an agent is running or queued on
-  // (the activity badge's rule) change. Each mount asks once, because a task
-  // that ended while the inbox was closed often sends no inbox event, and the
-  // cached idle pages and snapshot may both predate it.
-  const { data: taskSnapshot } = useQuery(agentTaskSnapshotOptions(wsId));
-  const busyIssues = useMemo(
-    () => taskSnapshot && [...deriveIssueSurfaceActivity(taskSnapshot).activityByIssueId.keys()].sort().join(","),
-    [taskSnapshot],
-  );
-  useEffect(() => {
-    if (busyIssues !== undefined) void refreshInboxIdleQueries(queryClient, wsId);
-  }, [busyIssues, queryClient, wsId]);
+  useInboxIdleRefresh(wsId);
 
   const writeViewState = useViewStateWriter();
   // Bumped when the already-open notification row is re-clicked; threaded to

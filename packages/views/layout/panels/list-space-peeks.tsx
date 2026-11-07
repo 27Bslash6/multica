@@ -22,6 +22,7 @@ import { agentListOptions } from "@multica/core/workspace/queries";
 import { ChatThreadList } from "../../chat/components/chat-thread-list";
 import { useT } from "../../i18n";
 import { InboxList } from "../../inbox/components/inbox-list";
+import { useInboxIdleRefresh } from "../../inbox/components/use-inbox-idle-refresh";
 import { useNavigation } from "../../navigation";
 import { PanelCount, PanelHeader } from "../panel-nav";
 
@@ -33,7 +34,9 @@ const EMPTY_AGENTS: Agent[] = [];
  * the same saved filters. Opening a row lands on it in the Inbox.
  *
  * It reads the Inbox page's own active pages, so the server applies the
- * filters, the idle dimension included, and the two share one cache.
+ * filters, the idle dimension included, and the two share one cache. The peek
+ * shows only while the page is closed, so it re-reads the idle pages on agent
+ * activity itself.
  */
 export function InboxPeek() {
   const { t } = useT("inbox");
@@ -42,6 +45,7 @@ export function InboxPeek() {
   const { push } = useNavigation();
   const filters = useInboxFilters(wsId);
   const query = useInfiniteQuery(inboxPagesOptions(wsId, filters));
+  useInboxIdleRefresh(wsId);
   const unreadCount = useInboxUnreadCount(wsId);
   const archive = useArchiveInbox();
 

@@ -1,11 +1,12 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
 import { EMPTY_INBOX_FILTERS, useInboxFilterStore, type InboxFilters } from "@multica/core/inbox/filter-store";
 import { inboxKeys, inboxPagesOptions } from "@multica/core/inbox/queries";
-import type { ArchivedInboxPage, InboxItem } from "@multica/core/types";
+import type { AgentTask, ArchivedInboxPage, InboxItem } from "@multica/core/types";
 import { InboxPeek } from "./list-space-peeks";
 
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "workspace-1" }));
@@ -99,5 +100,35 @@ describe("InboxPeek", () => {
     fireEvent.click(await screen.findByText("inbox-a"));
 
     await waitFor(() => expect(push).toHaveBeenCalledWith("/acme/inbox?issue=issue-a"));
+  });
+
+  // The peek shows only while the Inbox page is closed, so nothing else
+  // re-reads its idle pages when a task starts or ends: such a task often
+  // sends no inbox event.
+  it.each([false, true])("follows the server's idle list when the issue's agent work changes (busy at first: %s)", async (initialBusy) => {
+    useInboxFilterStore.getState().toggleIdleOnly("workspace-1");
+    let busy = initialBusy;
+    const listInboxPage = vi.fn(async (filters: InboxFilters) => page(filters.idleOnly && busy ? [] : [item()]));
+    const tasks = () => busy ? [{ id: "task-a", issue_id: "issue-a", agent_id: "agent-1", status: "running" } as AgentTask] : [];
+    const getAgentTaskSnapshot = vi.fn(async () => tasks());
+    setApiInstance({ listInboxPage, getAgentTaskSnapshot, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+
+    // Another surface observes the snapshot too, as the app shell's do, so it
+    // refetches below whether or not the peek reads it.
+    function TaskObserver() { useQuery(agentTaskSnapshotOptions("workspace-1")); return null; }
+    render(<QueryClientProvider client={qc}><TaskObserver /><InboxPeek /></QueryClientProvider>);
+    await waitFor(() => expect(getAgentTaskSnapshot).toHaveBeenCalledOnce());
+    await waitFor(() => expect(qc.isFetching()).toBe(0));
+    expect(!!screen.queryByText("inbox-a")).toBe(!initialBusy);
+    const readsBefore = listInboxPage.mock.calls.length;
+
+    // What the task lifecycle handler does: invalidate the snapshot.
+    busy = !busy;
+    await act(async () => { await qc.invalidateQueries({ queryKey: agentTaskSnapshotOptions("workspace-1").queryKey }); });
+    expect(getAgentTaskSnapshot).toHaveBeenCalledTimes(2);
+    expect(qc.getQueryData(agentTaskSnapshotOptions("workspace-1").queryKey)).toEqual(tasks());
+
+    await waitFor(() => expect(!!screen.queryByText("inbox-a")).toBe(initialBusy));
+    expect(listInboxPage.mock.calls.length).toBeGreaterThan(readsBefore);
   });
 });
