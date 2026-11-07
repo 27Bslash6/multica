@@ -290,9 +290,25 @@ describe("InboxFilterMenu", () => {
     );
   });
 
-  // Both views are filtered by the server, which has no idle dimension.
-  it.each([false, true])("offers no idle filter (archived: %s)", async (archived) => {
-    renderMenu({ archived });
+  it("offers the idle filter in the active view with the server's count of idle groups", async () => {
+    const getInboxFacets = vi.fn(async () => ({ ...ITEM_FACETS, idleCount: 7 }));
+    renderMenu({ getInboxFacets });
+
+    fireEvent.click(screen.getByRole("button", { name: "Filter inbox" }));
+    const idle = await screen.findByRole("menuitemcheckbox", { name: /No agents working.*7/ });
+    expect(idle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(idle);
+
+    expect(useInboxFilterStore.getState().filtersByWorkspace["ws-1"]?.idleOnly).toBe(true);
+    await waitFor(() => expect(getInboxFacets).toHaveBeenLastCalledWith(
+      expect.objectContaining({ idleOnly: true }), expect.anything(),
+    ));
+  });
+
+  // The archive is filtered by the server, which has no idle dimension there.
+  it("offers no idle filter in the archive, where a carried-over selection stays dormant", async () => {
+    useInboxFilterStore.getState().toggleIdleOnly("ws-1");
+    renderMenu({ archived: true });
 
     fireEvent.click(screen.getByRole("button", { name: "Filter inbox" }));
     await screen.findByRole("menuitemcheckbox", { name: /Unread only/ });

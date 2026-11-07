@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CircleDot, Filter, Mail, RotateCcw, SignalHigh, UserRound } from "@multica/ui/icons";
+import { BotOff, CircleDot, Filter, Mail, RotateCcw, SignalHigh, UserRound } from "@multica/ui/icons";
 import { PRIORITY_DISPLAY_ORDER } from "@multica/core/issues/config";
 import {
   inboxActorKeyParts,
+  inboxFiltersForArchive,
   inboxFilterCount,
   useInboxFilters,
   useInboxFilterStore,
@@ -63,6 +64,7 @@ export function InboxFilterMenu({
   const toggleUnreadOnly = useInboxFilterStore(
     (state) => state.toggleUnreadOnly,
   );
+  const toggleIdleOnly = useInboxFilterStore((state) => state.toggleIdleOnly);
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
   const clearFilters = useInboxFilterStore((state) => state.clearFilters);
   const inboxStatusKeys = useMemo(
@@ -78,13 +80,15 @@ export function InboxFilterMenu({
     [items, facets, filters.statuses],
   );
   const statusOptions = useStatusOptions(wsId, inboxStatusKeys);
-  const activeCount = inboxFilterCount(filters);
+  // An idle selection kept from the active view stays dormant in the archive.
+  const activeCount = inboxFilterCount(archived ? inboxFiltersForArchive(filters) : filters);
 
   // Counts are faceted: every count respects the other active dimensions while
   // ignoring its own, so each number says how many rows selecting that value
   // can actually reveal. The loaded pages cannot answer that, so the server
   // counts the whole view.
   const unreadCount = facets?.unreadCount ?? 0;
+  const idleCount = facets?.idleCount ?? 0;
   const statuses = new Map(Object.entries(facets?.statuses ?? {}));
   const priorities = new Map(Object.entries(facets?.priorities ?? {}));
   const actors = new Map(Object.entries(facets?.actors ?? {}));
@@ -146,8 +150,21 @@ export function InboxFilterMenu({
             </span>
           )}
         </DropdownMenuCheckboxItem>
-        {/* No "no agents working" filter: both views are filtered server-side,
-            which has no idle dimension. */}
+        {/* The archive is filtered server-side, which has no idle dimension. */}
+        {!archived && (
+          <DropdownMenuCheckboxItem
+            checked={filters.idleOnly}
+            onCheckedChange={() => toggleIdleOnly(wsId)}
+          >
+            <BotOff className="size-3.5" />
+            <span className="flex-1">{t(($) => $.filters.no_agents_working)}</span>
+            {idleCount > 0 && (
+              <span className="text-caption text-muted-foreground">
+                {t(($) => $.filters.notification_count, { count: idleCount })}
+              </span>
+            )}
+          </DropdownMenuCheckboxItem>
+        )}
         <DropdownMenuSeparator />
 
         {actorOptions.length > 0 && (

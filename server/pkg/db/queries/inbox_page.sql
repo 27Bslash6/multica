@@ -17,8 +17,18 @@ WITH newest AS MATERIALIZED (
       AND (sqlc.narg(group_id)::uuid IS NULL OR i.issue_id = sqlc.narg(group_id)::uuid
            OR (i.issue_id IS NULL AND i.id = sqlc.narg(group_id)::uuid))
     ORDER BY COALESCE(i.issue_id, i.id), i.created_at DESC, i.id DESC
+), busy AS (
+    -- Issues an agent is running or queued on: the active half of
+    -- ListWorkspaceAgentTaskSnapshot, which the client's activity badge reads.
+    SELECT atq.issue_id FROM agent_task_queue atq
+    JOIN agent a ON a.id = atq.agent_id
+    WHERE a.workspace_id = sqlc.arg(workspace_id)::uuid AND atq.issue_id IS NOT NULL
+      AND (atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+           OR (atq.status = 'deferred' AND atq.context->>'wakeup_id' IS NOT NULL))
 ), projected AS (
-    SELECT newest.*, iss.status AS issue_status, iss.priority AS issue_priority
+    -- Idle asks about the issue, so a group without one is never idle.
+    SELECT newest.*, iss.status AS issue_status, iss.priority AS issue_priority,
+           (iss.id IS NOT NULL AND iss.id NOT IN (SELECT issue_id FROM busy)) AS idle
     FROM newest
     LEFT JOIN issue iss ON iss.id = newest.issue_id
       AND iss.workspace_id = sqlc.arg(workspace_id)::uuid
@@ -27,12 +37,13 @@ WITH newest AS MATERIALIZED (
            (cardinality(sqlc.arg(statuses)::text[]) = 0 OR issue_status = ANY(sqlc.arg(statuses)::text[])) AS status_match,
            (cardinality(sqlc.arg(priorities)::text[]) = 0 OR issue_priority = ANY(sqlc.arg(priorities)::text[])) AS priority_match,
            (cardinality(sqlc.arg(actors)::text[]) = 0 OR actor = ANY(sqlc.arg(actors)::text[])) AS actor_match,
-           (NOT sqlc.arg(unread_only)::boolean OR NOT read) AS read_match
+           (NOT sqlc.arg(unread_only)::boolean OR NOT read) AS read_match,
+           (NOT sqlc.arg(idle_only)::boolean OR idle) AS idle_match
     FROM projected
 )
 , selected AS (
     SELECT * FROM matched
-    WHERE status_match AND priority_match AND actor_match AND read_match
+    WHERE status_match AND priority_match AND actor_match AND read_match AND idle_match
       AND (sqlc.narg(before_time)::timestamptz IS NULL OR
            (created_at, id) < (sqlc.narg(before_time)::timestamptz, sqlc.narg(before_id)::uuid))
     ORDER BY created_at DESC, id DESC
@@ -67,8 +78,17 @@ WITH newest AS MATERIALIZED (
       AND i.recipient_id = sqlc.arg(recipient_id)::uuid
       AND i.archived = false
     ORDER BY COALESCE(i.issue_id, i.id), i.created_at DESC, i.id DESC
+), busy AS (
+    -- Issues an agent is running or queued on: the active half of
+    -- ListWorkspaceAgentTaskSnapshot, which the client's activity badge reads.
+    SELECT atq.issue_id FROM agent_task_queue atq
+    JOIN agent a ON a.id = atq.agent_id
+    WHERE a.workspace_id = sqlc.arg(workspace_id)::uuid AND atq.issue_id IS NOT NULL
+      AND (atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+           OR (atq.status = 'deferred' AND atq.context->>'wakeup_id' IS NOT NULL))
 ), projected AS (
-    SELECT newest.*, iss.status AS issue_status, iss.priority AS issue_priority
+    SELECT newest.*, iss.status AS issue_status, iss.priority AS issue_priority,
+           (iss.id IS NOT NULL AND iss.id NOT IN (SELECT issue_id FROM busy)) AS idle
     FROM newest
     LEFT JOIN issue iss ON iss.id = newest.issue_id
       AND iss.workspace_id = sqlc.arg(workspace_id)::uuid
@@ -77,21 +97,26 @@ WITH newest AS MATERIALIZED (
            (cardinality(sqlc.arg(statuses)::text[]) = 0 OR issue_status = ANY(sqlc.arg(statuses)::text[])) AS status_match,
            (cardinality(sqlc.arg(priorities)::text[]) = 0 OR issue_priority = ANY(sqlc.arg(priorities)::text[])) AS priority_match,
            (cardinality(sqlc.arg(actors)::text[]) = 0 OR actor = ANY(sqlc.arg(actors)::text[])) AS actor_match,
-           (NOT sqlc.arg(unread_only)::boolean OR NOT read) AS read_match
+           (NOT sqlc.arg(unread_only)::boolean OR NOT read) AS read_match,
+           (NOT sqlc.arg(idle_only)::boolean OR idle) AS idle_match
     FROM projected
 )
 SELECT 'statuses'::text AS dimension, issue_status::text AS key,
-       count(*) FILTER (WHERE priority_match AND actor_match AND read_match)::bigint AS count
+       count(*) FILTER (WHERE priority_match AND actor_match AND read_match AND idle_match)::bigint AS count
 FROM matched WHERE issue_status IS NOT NULL GROUP BY issue_status
 UNION ALL
 SELECT 'priorities'::text, issue_priority::text,
-       count(*) FILTER (WHERE status_match AND actor_match AND read_match)::bigint
+       count(*) FILTER (WHERE status_match AND actor_match AND read_match AND idle_match)::bigint
 FROM matched WHERE issue_priority IS NOT NULL GROUP BY issue_priority
 UNION ALL
 SELECT 'actors'::text, actor::text,
-       count(*) FILTER (WHERE status_match AND priority_match AND read_match)::bigint
+       count(*) FILTER (WHERE status_match AND priority_match AND read_match AND idle_match)::bigint
 FROM matched WHERE actor IS NOT NULL GROUP BY actor
 UNION ALL
 SELECT 'unread'::text, 'unread'::text,
-       count(*) FILTER (WHERE status_match AND priority_match AND actor_match AND NOT read)::bigint
+       count(*) FILTER (WHERE status_match AND priority_match AND actor_match AND idle_match AND NOT read)::bigint
+FROM matched
+UNION ALL
+SELECT 'idle'::text, 'idle'::text,
+       count(*) FILTER (WHERE status_match AND priority_match AND actor_match AND read_match AND idle)::bigint
 FROM matched;
