@@ -2,9 +2,12 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { ApiError } from "@multica/core/api";
-import type { InboxItem } from "@multica/core/types";
+import type { AgentTask, InboxItem } from "@multica/core/types";
 import { useInboxFilterStore } from "@multica/core/inbox/filter-store";
 import { InboxPage } from "./inbox-page";
+
+const onInboxBusyIssuesChange = vi.hoisted(() => vi.fn());
+vi.mock("@multica/core/inbox/ws-updaters", () => ({ onInboxBusyIssuesChange }));
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -17,9 +20,10 @@ vi.mock("react-resizable-panels", () => ({
 // The page runs a paged query per view — the active list and the archived one
 // — plus a deep-link lookup. They are told apart by the queryKey their options
 // carry, so each test can stock the two lists independently.
-const listData: { active: InboxItem[]; archived: InboxItem[]; lookup?: InboxItem[] } = {
+const listData: { active: InboxItem[]; archived: InboxItem[]; lookup?: InboxItem[]; tasks: AgentTask[] } = {
   active: [],
   archived: [],
+  tasks: [],
 };
 
 const queryCalls: Array<{ queryKey: readonly unknown[]; enabled?: boolean }> = [];
@@ -35,13 +39,14 @@ vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => queryClient,
   useQuery: (options: { queryKey: readonly unknown[]; enabled?: boolean }) => {
     queryCalls.push(options);
+    if (options.queryKey.includes("agent-task-snapshot")) return { data: listData.tasks };
     const rows = options.queryKey.includes("archived") ? listData.archived : listData.active;
     return ({
     data: { items: listData.lookup ?? rows, hasMore: false, nextCursor: null },
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
-    ...(options.queryKey.includes("lookup") ? lookupState : {}),
+    ...(options.queryKey.includes("lookup") ? { ...lookupState, isPending: lookupState.isLoading } : {}),
   }); },
   useInfiniteQuery: (options: { queryKey: readonly unknown[]; enabled?: boolean }) => {
     queryCalls.push(options);
@@ -288,6 +293,8 @@ function reset() {
   listData.active = [];
   listData.archived = [];
   listData.lookup = undefined;
+  listData.tasks = [];
+  onInboxBusyIssuesChange.mockClear();
   lookupState.isLoading = false;
   lookupState.isError = false;
   lookupState.refetch.mockClear();
@@ -320,6 +327,19 @@ function reset() {
 }
 
 describe("InboxPage", () => {
+  it("enabling unread hides a read row pinned by idle", () => {
+    reset();
+    layout.width = DESKTOP;
+    listData.active = [item({ id: "read-row", issue_id: "idle-issue", read: true })];
+    useInboxFilterStore.getState().toggleIdleOnly("workspace-1");
+    render(<InboxPage />);
+    fireEvent.click(screen.getByTestId("row"));
+
+    act(() => useInboxFilterStore.getState().toggleUnreadOnly("workspace-1"));
+
+    expect(screen.queryByTestId("row")).toBeNull();
+  });
+
   it("keeps the list subordinate to the detail pane on desktop", () => {
     reset();
     layout.width = DESKTOP;
@@ -601,6 +621,20 @@ describe("InboxPage", () => {
     expect(archivedView.querySelector('[aria-haspopup="menu"]')).toBeNull();
   });
 
+  it("ignores a carried-over idle selection in the archive", () => {
+    reset();
+    searchParams = new URLSearchParams("view=archived");
+    listData.archived = [item({ id: "archived-busy", issue_id: "issue-1", archived: true })];
+    listData.tasks = [
+      { id: "task-1", agent_id: "agent-1", issue_id: "issue-1", status: "running" },
+    ] as AgentTask[];
+    useInboxFilterStore.getState().toggleIdleOnly("workspace-1");
+
+    render(<InboxPage />);
+
+    expect(screen.getByTestId("row")).toHaveTextContent("archived-busy");
+  });
+
   it("keeps the archive open when it is empty", () => {
     reset();
     searchParams = new URLSearchParams("view=archived");
@@ -815,6 +849,7 @@ describe("InboxPage", () => {
     expect(screen.getByTestId("row")).toHaveTextContent("inbox-a");
     expect(replace).not.toHaveBeenCalledWith("/acme/inbox");
   });
+
 
   it("keeps an explicitly unread row unread while it stays open", () => {
     // Without the guard the auto-read effect fires on the very next commit and
