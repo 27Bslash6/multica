@@ -27,13 +27,9 @@
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
+import type { InboxItem } from "@multica/core/types";
 import { api } from "@/data/api";
-import {
-  inboxCacheItems,
-  inboxKeys,
-  patchInboxCaches,
-  type InboxCache,
-} from "@/data/queries/inbox";
+import { inboxKeys } from "@/data/queries/inbox";
 import {
   refreshInboxList,
   refreshInboxUnreadSummary,
@@ -69,18 +65,18 @@ export function useMarkInboxRead() {
   return useMutation({
     mutationFn: (id: string) => api.markInboxRead(id),
     onMutate: async (id) => {
-      // Synchronous patch FIRST — see the file-level doc comment for why. The
-      // snapshot it returns is taken before the patch, so a rollback restores
-      // the unread row. Cancelling afterwards keeps the patch: TanStack
-      // reverts a cancelled fetch to the latest manual write.
-      const prev = patchInboxCaches(qc, wsId, (items) =>
-        items.map((item) => (item.id === id ? { ...item, read: true } : item)),
+      const key = inboxKeys.list(wsId);
+      // Synchronous patch FIRST — see the file-level doc comment for why.
+      qc.setQueryData<InboxItem[]>(key, (old) =>
+        old?.map((item) => (item.id === id ? { ...item, read: true } : item)),
       );
-      await qc.cancelQueries({ queryKey: inboxKeys.list(wsId) });
-      return { prev };
+      // Then the standard cancel + snapshot dance for rollback.
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<InboxItem[]>(key);
+      return { prev, key };
     },
     onError: (_err, _id, ctx) => {
-      for (const [key, data] of ctx?.prev ?? []) qc.setQueryData(key, data);
+      if (ctx?.prev) qc.setQueryData(ctx.key, ctx.prev);
     },
     onSettled: () => {
       refreshInboxAfterWrite(qc, wsId);
@@ -95,29 +91,27 @@ export function useArchiveInbox() {
   return useMutation({
     mutationFn: (id: string) => api.archiveInbox(id),
     onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: inboxKeys.list(wsId) });
+      const key = inboxKeys.list(wsId);
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<InboxItem[]>(key);
       // Match web: archive every row that shares the same issue_id — the
       // single archive endpoint archives all sibling rows server-side too
       // (`server/internal/queries/inbox.sql` UPDATE … WHERE issue_id = ?).
       // Patching only the tapped row would let dedup'd siblings briefly
-      // resurface between the request and the WS invalidate — and a group
-      // can sit on two pages at once, or in a lookup as well as a page.
-      const issueId =
-        qc
-          .getQueriesData<InboxCache>({ queryKey: inboxKeys.list(wsId) })
-          .flatMap(([, data]) => (data ? inboxCacheItems(data) : []))
-          .find((i) => i.id === id)?.issue_id ?? null;
-      const prev = patchInboxCaches(qc, wsId, (items) =>
-        items.map((item) =>
+      // resurface between the request and the WS invalidate.
+      const target = prev?.find((i) => i.id === id);
+      const issueId = target?.issue_id ?? null;
+      qc.setQueryData<InboxItem[]>(key, (old) =>
+        old?.map((item) =>
           item.id === id || (issueId && item.issue_id === issueId)
             ? { ...item, archived: true }
             : item,
         ),
       );
-      return { prev };
+      return { prev, key };
     },
     onError: (_err, _id, ctx) => {
-      for (const [key, data] of ctx?.prev ?? []) qc.setQueryData(key, data);
+      if (ctx?.prev) qc.setQueryData(ctx.key, ctx.prev);
     },
     onSettled: () => {
       refreshInboxAfterWrite(qc, wsId);
@@ -132,16 +126,18 @@ export function useMarkAllInboxRead() {
   return useMutation({
     mutationFn: () => api.markAllInboxRead(),
     onMutate: async () => {
-      await qc.cancelQueries({ queryKey: inboxKeys.list(wsId) });
-      const prev = patchInboxCaches(qc, wsId, (items) =>
-        items.map((item) =>
+      const key = inboxKeys.list(wsId);
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<InboxItem[]>(key);
+      qc.setQueryData<InboxItem[]>(key, (old) =>
+        old?.map((item) =>
           !item.archived ? { ...item, read: true } : item,
         ),
       );
-      return { prev };
+      return { prev, key };
     },
     onError: (_err, _vars, ctx) => {
-      for (const [key, data] of ctx?.prev ?? []) qc.setQueryData(key, data);
+      if (ctx?.prev) qc.setQueryData(ctx.key, ctx.prev);
     },
     onSettled: () => {
       refreshInboxAfterWrite(qc, wsId);

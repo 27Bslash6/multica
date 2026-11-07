@@ -1,12 +1,11 @@
 import { useCallback, useMemo } from "react";
 import {
   ActionSheetIOS,
-  ActivityIndicator,
   Alert,
   FlatList,
   View,
 } from "react-native";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import type { InboxItem } from "@multica/core/types";
@@ -17,7 +16,7 @@ import { Header } from "@/components/ui/header";
 import { IconButton } from "@/components/ui/icon-button";
 import { HeaderActions } from "@/components/ui/app-header-actions";
 import { SwipeableInboxRow } from "@/components/inbox/swipeable-inbox-row";
-import { inboxCacheItems, inboxPagesOptions } from "@/data/queries/inbox";
+import { inboxListOptions } from "@/data/queries/inbox";
 import {
   useArchiveAllInbox,
   useArchiveAllReadInbox,
@@ -40,33 +39,15 @@ export default function Inbox() {
   const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const wsSlug = useWorkspaceStore((s) => s.currentWorkspaceSlug);
   const { colorScheme } = useColorScheme();
-  const {
-    data: pages,
-    isLoading,
-    error,
-    refetch,
-    isRefetching,
-    isFetching,
-    hasNextPage,
-    fetchNextPage,
-    isFetchNextPageError,
-  } = useInfiniteQuery(inboxPagesOptions(wsId));
-  // Dedup + drop archived to match web/desktop. See CLAUDE.md
-  // "Behavioral parity" → inbox dedup incident. Pages hold one row per group
-  // already, but a group can move between pages between two fetches, so the
-  // same dedup also keeps the newest copy across pages.
-  const data = useMemo(
-    () => deduplicateInboxItems(pages ? inboxCacheItems(pages) : []),
-    [pages],
+  const { data: rawItems, isLoading, error, refetch, isRefetching } = useQuery(
+    inboxListOptions(wsId),
   );
-  // Never start a page while any fetch is in flight. fetchNextPage cancels a
-  // running refetch, and that refetch is how an inbox event or a mutation
-  // re-reads the list — cancelling it would leave the loaded pages stale. The
-  // footer spinner covers the wait; when it unmounts, the list's content
-  // size changes and onEndReached fires again if the user is still at the end.
-  const onEndReached = () => {
-    if (hasNextPage && !isFetching) void fetchNextPage();
-  };
+  // Dedup + drop archived to match web/desktop. See CLAUDE.md
+  // "Behavioral parity" → inbox dedup incident.
+  const data = useMemo(
+    () => deduplicateInboxItems(rawItems ?? []),
+    [rawItems],
+  );
   const markRead = useMarkInboxRead();
   const markAllRead = useMarkAllInboxRead();
   const archive = useArchiveInbox();
@@ -144,7 +125,7 @@ export default function Inbox() {
       />
       {isLoading ? (
         <InboxLoading />
-      ) : error && !isFetchNextPageError ? (
+      ) : error ? (
         <View className="px-4 gap-3 pt-4">
           <Text className="text-sm text-destructive">
             {t("errors.load_failed", {
@@ -174,20 +155,6 @@ export default function Inbox() {
           )}
           refreshing={isRefetching}
           onRefresh={refetch}
-          onEndReached={onEndReached}
-          ListFooterComponent={
-            hasNextPage && isFetching ? (
-              <View className="items-center py-4">
-                <ActivityIndicator />
-              </View>
-            ) : isFetchNextPageError ? (
-              <View className="px-4 pt-4">
-                <Button variant="outline" onPress={() => fetchNextPage()}>
-                  <Text>{t("common:actions.retry")}</Text>
-                </Button>
-              </View>
-            ) : null
-          }
         />
       )}
     </View>

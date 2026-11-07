@@ -26,7 +26,6 @@ import type {
   CreateProjectRequest,
   CreateProjectResourceRequest,
   InboxItem,
-  InboxPage,
   InboxWorkspaceUnread,
   Issue,
   IssueLabelsResponse,
@@ -98,6 +97,7 @@ import {
   EMPTY_CHAT_PENDING_TASK,
   EMPTY_CHAT_SESSION_LIST,
   EMPTY_COMMENT,
+  EMPTY_INBOX_LIST,
   EMPTY_INBOX_UNREAD_SUMMARY,
   EMPTY_ISSUE_FALLBACK,
   EMPTY_LIST_LABELS_RESPONSE,
@@ -113,7 +113,7 @@ import {
   EMPTY_SQUAD_LIST,
   EMPTY_USER,
   EMPTY_WORKSPACE_LIST,
-  InboxPageSchema,
+  InboxListSchema,
   InboxUnreadSummarySchema,
   NotificationPreferenceResponseSchema,
   ListLabelsResponseSchema,
@@ -500,40 +500,19 @@ class ApiClient {
   }
 
   // --- Inbox ---
-  /**
-   * One page of the inbox, one row per issue group (#6527): the legacy
-   * `GET /api/inbox` returns every notification row with no limit. `cursor`
-   * continues from a previous page; `groupId` (an issue id, or the item id of
-   * an issue-less notification) returns only that group, for a record that is
-   * not on any loaded page.
-   *
-   * Throws on a malformed page rather than falling back: an empty fallback
-   * would read as "inbox empty" and hide the retry affordance. Mirrors
-   * `listInboxPage` in packages/core/api/client.ts.
-   */
-  async listInboxPage(opts: {
-    cursor?: string | null;
-    groupId?: string;
-    signal?: AbortSignal;
-  } = {}): Promise<InboxPage> {
-    const search = new URLSearchParams();
-    search.set("limit", "50");
-    if (opts.cursor) search.set("cursor", opts.cursor);
-    if (opts.groupId) search.set("group_id", opts.groupId);
-    const page = await this.fetchValidated<InboxPage | null>(
-      `/api/inbox/page?${search.toString()}`,
-      InboxPageSchema,
-      null,
-      { signal: opts.signal, endpoint: "GET /api/inbox/page" },
-    );
-    if (!page) throw new Error("Invalid inbox page response");
-    return page;
+  async listInbox(opts?: { signal?: AbortSignal }): Promise<InboxItem[]> {
+    const raw = await this.fetch<unknown>("/api/inbox", {
+      signal: opts?.signal,
+    });
+    return parseWithFallback(raw, InboxListSchema, EMPTY_INBOX_LIST, {
+      endpoint: "listInbox",
+    });
   }
 
   /**
    * Cross-workspace unread inbox counts, one entry per workspace with unread
    * items. Backs the inbox tab badge — see lib/unread-counts.ts for why the
-   * badge reads this instead of counting the inbox list locally.
+   * badge reads this instead of counting `listInbox()` locally.
    */
   async getInboxUnreadSummary(opts?: {
     signal?: AbortSignal;
