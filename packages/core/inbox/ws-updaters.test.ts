@@ -11,6 +11,7 @@ import {
   onInboxInvalidate,
   onInboxIssueDeleted,
   onInboxNew,
+  onInboxBusyIssuesChange,
   onInboxIssueStatusChanged,
   onInboxSummaryInvalidate,
   patchInboxIssueProjection,
@@ -18,6 +19,8 @@ import {
 import { EMPTY_INBOX_FILTERS } from "./filter-store";
 import {
   archivedInboxPagesOptions,
+  inboxFacetsOptions,
+  inboxLookupOptions,
   inboxCacheItems,
   inboxKeys,
   inboxPagesOptions,
@@ -174,6 +177,49 @@ describe("onInboxInvalidate ordering", () => {
     await onInboxInvalidate(qc, wsId);
 
     expect(calls).toEqual(["cancel", "invalidate"]);
+  });
+});
+
+describe("onInboxBusyIssuesChange", () => {
+  const idle = { ...EMPTY_INBOX_FILTERS, idleOnly: true };
+  const invalidatedOf = (qc: QueryClient, keys: Record<string, QueryKey>) =>
+    Object.fromEntries(Object.entries(keys).map(([name, key]) => [name, qc.getQueryState(key)?.isInvalidated]));
+
+  it("re-reads the active facets and idle-filtered pages and lookups, and nothing a task cannot change", async () => {
+    const qc = new QueryClient();
+    const keys = {
+      idlePages: inboxPagesOptions(wsId, idle).queryKey,
+      idleUnreadPages: inboxPagesOptions(wsId, { ...idle, unreadOnly: true }).queryKey,
+      idleLookup: inboxLookupOptions(wsId, "issue-2", idle).queryKey,
+      facets: inboxFacetsOptions(wsId, EMPTY_INBOX_FILTERS).queryKey,
+      pages: activePagesKey,
+      lookup: inboxLookupOptions(wsId, "issue-1").queryKey,
+      archivedPages: archivedPagesKey,
+      otherWorkspace: inboxPagesOptions("ws-2", idle).queryKey,
+    };
+    for (const key of Object.values<QueryKey>(keys)) qc.setQueryData(key, {});
+
+    await onInboxBusyIssuesChange(qc, wsId);
+
+    expect(invalidatedOf(qc, keys)).toEqual({
+      idlePages: true, idleUnreadPages: true, idleLookup: true, facets: true,
+      pages: false, lookup: false, archivedPages: false, otherWorkspace: false,
+    });
+  });
+
+  it("cancels an idle page's first load in flight and marks it for a re-read", async () => {
+    // Its request may have read the server before the task event, so its
+    // answer must not stand.
+    const qc = new QueryClient();
+    const key = inboxPagesOptions(wsId, idle).queryKey;
+    const firstLoad = vi.fn(() => new Promise(() => {}));
+    void qc.prefetchQuery({ queryKey: key, queryFn: firstLoad });
+    expect(qc.getQueryState(key)?.fetchStatus).toBe("fetching");
+
+    await onInboxBusyIssuesChange(qc, wsId);
+
+    expect(firstLoad).toHaveBeenCalledOnce();
+    expect(qc.getQueryState(key)).toMatchObject({ fetchStatus: "idle", isInvalidated: true });
   });
 });
 

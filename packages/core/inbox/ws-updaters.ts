@@ -1,4 +1,5 @@
-import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
+import type { InboxFilters } from "./filter-store";
 import { inboxKeys, mapInboxCache, type InboxCache } from "./queries";
 import type { InboxItem, IssuePriority, IssueStatus } from "../types";
 
@@ -185,6 +186,24 @@ export function cancelInboxLists(qc: QueryClient, wsId: string): boolean {
 // is still marked invalidated.
 export async function onInboxInvalidate(qc: QueryClient, wsId: string) {
   await refreshInboxQuery(qc, inboxKeys.all(wsId));
+}
+
+/**
+ * Re-read what the busy issues (those an agent is running or queued on) can
+ * change: the active facets, and the active pages and lookups filtered to idle
+ * groups. The server decides which groups are idle, so only a re-read lists a
+ * group that went idle. No other cache depends on task state. Cancelling first
+ * restarts a load that may have read the server before a task event.
+ */
+export async function onInboxBusyIssuesChange(qc: QueryClient, wsId: string) {
+  const idleQueries = {
+    queryKey: inboxKeys.list(wsId),
+    predicate: (query: Query) => (query.queryKey.at(-1) as Partial<InboxFilters> | undefined)?.idleOnly === true,
+  };
+  await Promise.all([
+    refreshInboxQuery(qc, inboxKeys.listFacets(wsId)),
+    qc.cancelQueries(idleQueries).then(() => qc.invalidateQueries(idleQueries)),
+  ]);
 }
 
 // THE entry point for refreshing the cross-workspace unread summary — the

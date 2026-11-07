@@ -82,4 +82,6 @@ export interface InboxFacets {
   priorities: Record<string, number>;
   actors: Record<string, number>;
   unreadCount: number;
+  /** Groups whose issue no agent is working on. Active view only. */
+  idleCount?: number;
 }

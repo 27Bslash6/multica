@@ -1,6 +1,6 @@
 import type { InfiniteData, QueryClient, QueryKey } from "@tanstack/react-query";
 import type { InboxPage } from "../types/inbox";
-import { EMPTY_INBOX_FILTERS, type ArchivedInboxFilters } from "./filter-store";
+import { EMPTY_INBOX_FILTERS, type ArchivedInboxFilters, type InboxFilters } from "./filter-store";
 import { infiniteQueryOptions, queryOptions, useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import type { InboxItem, InboxWorkspaceUnread } from "../types";
@@ -25,20 +25,28 @@ export const inboxKeys = {
   unreadSummary: () => ["inbox", "unread-summary"] as const,
 };
 
-// Lists the paged dimensions explicitly. Neither paged endpoint has an idle
-// dimension, so an `idleOnly` never changes a key or refetches a view.
-function normalizedInboxFilters(filters: ArchivedInboxFilters): ArchivedInboxFilters {
+// A view's filters as its query keys hold them. Both views share the type, so
+// one call site can pick either view's options.
+type InboxFiltersKey = ArchivedInboxFilters & { idleOnly?: boolean };
+
+// Lists the paged dimensions explicitly. The archive has no idle dimension, so
+// an `idleOnly` never changes its keys or refetches it.
+function normalizedInboxFilters(filters: ArchivedInboxFilters): InboxFiltersKey {
   return { statuses: [...filters.statuses].sort(), priorities: [...filters.priorities].sort(),
     actors: [...filters.actors].sort(), unreadOnly: filters.unreadOnly };
+}
+
+function normalizedActiveInboxFilters(filters: InboxFilters): InboxFiltersKey {
+  return { ...normalizedInboxFilters(filters), idleOnly: filters.idleOnly };
 }
 
 /**
  * The active inbox, one issue group per row, loaded a page at a time. Filters
  * are applied by the server, so they stay correct beyond the loaded pages.
  */
-export function inboxPagesOptions(wsId: string, filters: ArchivedInboxFilters) {
+export function inboxPagesOptions(wsId: string, filters: InboxFilters) {
   return infiniteQueryOptions({
-    queryKey: [...inboxKeys.listPages(wsId), normalizedInboxFilters(filters)],
+    queryKey: [...inboxKeys.listPages(wsId), normalizedActiveInboxFilters(filters)],
     initialPageParam: null as string | null,
     queryFn: ({ pageParam, signal }) => api.listInboxPage(filters, { cursor: pageParam, signal }),
     getNextPageParam: (page) => page.nextCursor ?? undefined,
@@ -47,18 +55,18 @@ export function inboxPagesOptions(wsId: string, filters: ArchivedInboxFilters) {
 }
 
 /** One active group by key, for a selection beyond the loaded pages. */
-export function inboxLookupOptions(wsId: string, groupId: string, filters: ArchivedInboxFilters = EMPTY_INBOX_FILTERS) {
+export function inboxLookupOptions(wsId: string, groupId: string, filters: InboxFilters = EMPTY_INBOX_FILTERS) {
   return queryOptions({
-    queryKey: [...inboxKeys.listLookup(wsId), groupId, normalizedInboxFilters(filters)],
+    queryKey: [...inboxKeys.listLookup(wsId), groupId, normalizedActiveInboxFilters(filters)],
     queryFn: ({ signal }) => api.listInboxPage(filters, { groupId, signal }),
     enabled: !!groupId,
     retry: false,
   });
 }
 
-export function inboxFacetsOptions(wsId: string, filters: ArchivedInboxFilters) {
+export function inboxFacetsOptions(wsId: string, filters: InboxFilters) {
   return queryOptions({
-    queryKey: [...inboxKeys.listFacets(wsId), normalizedInboxFilters(filters)],
+    queryKey: [...inboxKeys.listFacets(wsId), normalizedActiveInboxFilters(filters)],
     queryFn: ({ signal }) => api.getInboxFacets(filters, signal),
     retry: false,
   });
