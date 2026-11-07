@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient } from "./client";
-import { EMPTY_INBOX_FILTERS } from "../inbox/filter-store";
+import { EMPTY_INBOX_FILTERS, type InboxFilters } from "../inbox/filter-store";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -16,12 +16,12 @@ describe("active inbox page API", () => {
     const fetch = respond({ items: [], next_cursor: null, has_more: false });
     const api = new ApiClient("https://api.example.test");
     await expect(api.listInboxPage({
-      statuses: ["in_review", "done"], priorities: ["high"], actors: ["system"], unreadOnly: true,
+      statuses: ["in_review", "done"], priorities: ["high"], actors: ["system"], unreadOnly: true, idleOnly: true,
     }, { cursor: "cursor-value", groupId: "group" })).resolves.toEqual({ items: [], nextCursor: null, hasMore: false });
     const url = new URL(fetch.mock.calls[0]![0]);
     expect(url.pathname).toBe("/api/inbox/page");
     expect(Object.fromEntries(url.searchParams)).toEqual({
-      statuses: "done,in_review", priorities: "high", actors: "system", unread_only: "true",
+      statuses: "done,in_review", priorities: "high", actors: "system", unread_only: "true", idle_only: "true",
       limit: "50", cursor: "cursor-value", group_id: "group",
     });
   });
@@ -48,16 +48,28 @@ describe("active inbox page API", () => {
   it("maps complete facets and rejects incomplete or invalid counts", async () => {
     const fetch = respond({ statuses: { in_review: 2 }, priorities: {}, actors: { system: 0 }, unread_count: 1 });
     const api = new ApiClient("https://api.example.test");
-    await expect(api.getInboxFacets({ ...EMPTY_INBOX_FILTERS, unreadOnly: true })).resolves.toEqual({
+    await expect(api.getInboxFacets({ ...EMPTY_INBOX_FILTERS, unreadOnly: true, idleOnly: true })).resolves.toEqual({
       statuses: { in_review: 2 }, priorities: {}, actors: { system: 0 }, unreadCount: 1,
     });
     const url = new URL(fetch.mock.calls[0]![0]);
     expect(url.pathname).toBe("/api/inbox/facets");
-    expect(Object.fromEntries(url.searchParams)).toEqual({ unread_only: "true" });
+    expect(Object.fromEntries(url.searchParams)).toEqual({ unread_only: "true", idle_only: "true" });
+    respond({ statuses: {}, priorities: {}, actors: {}, unread_count: 0, idle_count: 3 });
+    await expect(api.getInboxFacets(EMPTY_INBOX_FILTERS)).resolves.toMatchObject({ idleCount: 3 });
     for (const body of [{}, [], { statuses: {}, priorities: {}, actors: {}, unread_count: -1 },
-      { statuses: { done: 1.5 }, priorities: {}, actors: {}, unread_count: 0 }]) {
+      { statuses: { done: 1.5 }, priorities: {}, actors: {}, unread_count: 0 },
+      { statuses: {}, priorities: {}, actors: {}, unread_count: 0, idle_count: -1 }]) {
       respond(body);
       await expect(api.getInboxFacets(EMPTY_INBOX_FILTERS)).rejects.toThrow("Invalid inbox facets response");
     }
+  });
+
+  it("never sends the active view's idle selection to the archive's facets", async () => {
+    const fetch = respond({ statuses: {}, priorities: {}, actors: {}, unread_count: 0 });
+    const idle: InboxFilters = { ...EMPTY_INBOX_FILTERS, idleOnly: true };
+    await new ApiClient("https://api.example.test").getArchivedInboxFacets(idle);
+    const url = new URL(fetch.mock.calls[0]![0]);
+    expect(url.pathname).toBe("/api/inbox/archived/facets");
+    expect(Object.fromEntries(url.searchParams)).toEqual({});
   });
 });

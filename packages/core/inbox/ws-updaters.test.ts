@@ -11,6 +11,7 @@ import {
   onInboxInvalidate,
   onInboxIssueDeleted,
   onInboxNew,
+  syncInboxBusyIssues,
   onInboxIssueStatusChanged,
   onInboxSummaryInvalidate,
   patchInboxIssueProjection,
@@ -18,6 +19,8 @@ import {
 import { EMPTY_INBOX_FILTERS } from "./filter-store";
 import {
   archivedInboxPagesOptions,
+  inboxFacetsOptions,
+  inboxLookupOptions,
   inboxCacheItems,
   inboxKeys,
   inboxPagesOptions,
@@ -174,6 +177,82 @@ describe("onInboxInvalidate ordering", () => {
     await onInboxInvalidate(qc, wsId);
 
     expect(calls).toEqual(["cancel", "invalidate"]);
+  });
+});
+
+describe("syncInboxBusyIssues", () => {
+  const idle = { ...EMPTY_INBOX_FILTERS, idleOnly: true };
+  const invalidatedOf = (qc: QueryClient, keys: Record<string, QueryKey>) =>
+    Object.fromEntries(Object.entries(keys).map(([name, key]) => [name, qc.getQueryState(key)?.isInvalidated]));
+
+  it("re-reads the active facets and idle-filtered pages and lookups when the busy issues change, and nothing a task cannot change", async () => {
+    const qc = new QueryClient();
+    await syncInboxBusyIssues(qc, wsId, ["issue-1"], 0);
+    const keys = {
+      idlePages: inboxPagesOptions(wsId, idle).queryKey,
+      idleUnreadPages: inboxPagesOptions(wsId, { ...idle, unreadOnly: true }).queryKey,
+      idleLookup: inboxLookupOptions(wsId, "issue-2", idle).queryKey,
+      facets: inboxFacetsOptions(wsId, EMPTY_INBOX_FILTERS).queryKey,
+      pages: activePagesKey,
+      lookup: inboxLookupOptions(wsId, "issue-1").queryKey,
+      archivedPages: archivedPagesKey,
+      otherWorkspace: inboxPagesOptions("ws-2", idle).queryKey,
+    };
+    for (const key of Object.values<QueryKey>(keys)) qc.setQueryData(key, {});
+
+    await syncInboxBusyIssues(qc, wsId, ["issue-2", "issue-1"], 0);
+
+    expect(invalidatedOf(qc, keys)).toEqual({
+      idlePages: true, idleUnreadPages: true, idleLookup: true, facets: true,
+      pages: false, lookup: false, archivedPages: false, otherWorkspace: false,
+    });
+  });
+
+  it("re-reads nothing while the busy issues stay the same, whatever their order", async () => {
+    const qc = new QueryClient();
+    await syncInboxBusyIssues(qc, wsId, ["issue-1", "issue-2"], 0);
+    const keys = { idlePages: inboxPagesOptions(wsId, idle).queryKey, facets: inboxFacetsOptions(wsId, idle).queryKey };
+    for (const key of Object.values<QueryKey>(keys)) qc.setQueryData(key, {});
+
+    await syncInboxBusyIssues(qc, wsId, ["issue-2", "issue-1"], 0);
+
+    expect(invalidatedOf(qc, keys)).toEqual({ idlePages: false, facets: false });
+  });
+
+  it("without a record, re-reads only the idle caches read before the snapshot that showed the busy issues", async () => {
+    // A page loaded before the first task snapshot arrived may predate a task
+    // event; one read after it, or still on its first load, asked the server later.
+    const qc = new QueryClient();
+    const keys = {
+      before: inboxPagesOptions(wsId, idle).queryKey,
+      after: inboxPagesOptions(wsId, { ...idle, unreadOnly: true }).queryKey,
+      loading: inboxPagesOptions(wsId, { ...idle, statuses: ["todo"] }).queryKey,
+    };
+    qc.setQueryData<unknown>(keys.before, {}, { updatedAt: 100 });
+    qc.setQueryData<unknown>(keys.after, {}, { updatedAt: 300 });
+    void qc.prefetchQuery({ queryKey: keys.loading, queryFn: () => new Promise(() => {}) });
+
+    await syncInboxBusyIssues(qc, wsId, ["issue-1"], 200);
+
+    expect(invalidatedOf(qc, keys)).toEqual({ before: true, after: false, loading: false });
+    expect(qc.getQueryState(keys.loading)?.fetchStatus).toBe("fetching");
+  });
+
+  it("keeps the record across inbox page lifetimes, one per query client", async () => {
+    const qc = new QueryClient();
+    const key = inboxPagesOptions(wsId, idle).queryKey;
+    await syncInboxBusyIssues(qc, wsId, ["issue-1"], 0);
+    qc.setQueryData<unknown>(key, {}, { updatedAt: 100 });
+
+    // The page unmounted, the task ended, and a new page sees the snapshot.
+    await syncInboxBusyIssues(qc, wsId, [], 50);
+    expect(qc.getQueryState(key)?.isInvalidated).toBe(true);
+
+    // Another client has no record yet, and its cache is newer than the snapshot.
+    const other = new QueryClient();
+    other.setQueryData<unknown>(key, {}, { updatedAt: 100 });
+    await syncInboxBusyIssues(other, wsId, [], 50);
+    expect(other.getQueryState(key)?.isInvalidated).toBe(false);
   });
 });
 

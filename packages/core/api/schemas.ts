@@ -2780,9 +2780,12 @@ export const InboxFacetsSchema = z.object({
   priorities: z.record(z.string(), z.number().int().nonnegative()),
   actors: z.record(z.string(), z.number().int().nonnegative()),
   unread_count: z.number().int().nonnegative(),
+  // The archive has no idle dimension and answers without one.
+  idle_count: z.number().int().nonnegative().optional(),
 }).transform((facets) => ({
   statuses: facets.statuses, priorities: facets.priorities,
   actors: facets.actors, unreadCount: facets.unread_count,
+  ...(facets.idle_count === undefined ? {} : { idleCount: facets.idle_count }),
 }));
 
 // Billing schemas (cloud-billing proxy surface)

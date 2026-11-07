@@ -1,4 +1,5 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import type { InboxFilters } from "./filter-store";
 import { inboxKeys, mapInboxCache, type InboxCache } from "./queries";
 import type { InboxItem, IssuePriority, IssueStatus } from "../types";
 
@@ -185,6 +186,50 @@ export function cancelInboxLists(qc: QueryClient, wsId: string): boolean {
 // is still marked invalidated.
 export async function onInboxInvalidate(qc: QueryClient, wsId: string) {
   await refreshInboxQuery(qc, inboxKeys.all(wsId));
+}
+
+// The busy issues (an agent running or queued on them) each query client last
+// saw per workspace. The record outlives the inbox page: a task that ends while
+// the inbox is closed often sends no inbox event, so a return visit compares
+// the current busy issues against what the cached idle pages were read under,
+// not against the snapshot it mounts with.
+const seenBusyIssues = new WeakMap<QueryClient, Map<string, string>>();
+
+/**
+ * Re-read what a change in busy issues can change: the active facets, and the
+ * active pages and lookups filtered to idle groups. The server decides which
+ * groups are idle, so only a re-read lists a group that went idle. No other
+ * cache depends on task state.
+ *
+ * `snapshotAt` is when the task snapshot that showed `busyIssueIds` was read.
+ * Before any record exists, only an idle cache read earlier than that snapshot
+ * can be behind it; a cache still on its first load asked the server later.
+ */
+export async function syncInboxBusyIssues(
+  qc: QueryClient,
+  wsId: string,
+  busyIssueIds: Iterable<string>,
+  snapshotAt: number,
+) {
+  const busyIssues = [...busyIssueIds].sort().join(",");
+  let seen = seenBusyIssues.get(qc);
+  if (!seen) seenBusyIssues.set(qc, (seen = new Map()));
+  const previous = seen.get(wsId);
+  if (previous === busyIssues) return;
+  seen.set(wsId, busyIssues);
+  const idleCaches = qc.getQueryCache().findAll({
+    queryKey: inboxKeys.list(wsId),
+    predicate: (query) =>
+      (query.queryKey.at(-1) as Partial<InboxFilters> | undefined)?.idleOnly === true &&
+      (previous !== undefined || (query.state.data !== undefined && query.state.dataUpdatedAt < snapshotAt)),
+  });
+  // Exact keys: as a prefix, one cache's key also matches caches that filter
+  // on more dimensions, including those this check left alone.
+  await Promise.all([
+    refreshInboxQuery(qc, inboxKeys.listFacets(wsId)),
+    ...idleCaches.map(({ queryKey }) => qc.cancelQueries({ queryKey, exact: true })
+      .then(() => qc.invalidateQueries({ queryKey, exact: true }))),
+  ]);
 }
 
 // THE entry point for refreshing the cross-workspace unread summary — the
