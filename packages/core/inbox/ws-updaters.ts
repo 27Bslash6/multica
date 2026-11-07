@@ -1,4 +1,4 @@
-import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
 import type { InboxFilters } from "./filter-store";
 import { inboxKeys, mapInboxCache, type InboxCache } from "./queries";
 import type { InboxItem, IssuePriority, IssueStatus } from "../types";
@@ -201,34 +201,23 @@ const seenBusyIssues = new WeakMap<QueryClient, Map<string, string>>();
  * groups are idle, so only a re-read lists a group that went idle. No other
  * cache depends on task state.
  *
- * `snapshotAt` is when the task snapshot that showed `busyIssueIds` was read.
- * Before any record exists, only an idle cache read earlier than that snapshot
- * can be behind it; a cache still on its first load asked the server later.
+ * A first sight counts as a change: an idle cache may have been read, or may
+ * still be loading, from before a task event the snapshot already absorbed.
+ * Cancelling first restarts such a load.
  */
-export async function syncInboxBusyIssues(
-  qc: QueryClient,
-  wsId: string,
-  busyIssueIds: Iterable<string>,
-  snapshotAt: number,
-) {
+export async function syncInboxBusyIssues(qc: QueryClient, wsId: string, busyIssueIds: Iterable<string>) {
   const busyIssues = [...busyIssueIds].sort().join(",");
   let seen = seenBusyIssues.get(qc);
   if (!seen) seenBusyIssues.set(qc, (seen = new Map()));
-  const previous = seen.get(wsId);
-  if (previous === busyIssues) return;
+  if (seen.get(wsId) === busyIssues) return;
   seen.set(wsId, busyIssues);
-  const idleCaches = qc.getQueryCache().findAll({
+  const idleCaches = {
     queryKey: inboxKeys.list(wsId),
-    predicate: (query) =>
-      (query.queryKey.at(-1) as Partial<InboxFilters> | undefined)?.idleOnly === true &&
-      (previous !== undefined || (query.state.data !== undefined && query.state.dataUpdatedAt < snapshotAt)),
-  });
-  // Exact keys: as a prefix, one cache's key also matches caches that filter
-  // on more dimensions, including those this check left alone.
+    predicate: (query: Query) => (query.queryKey.at(-1) as Partial<InboxFilters> | undefined)?.idleOnly === true,
+  };
   await Promise.all([
     refreshInboxQuery(qc, inboxKeys.listFacets(wsId)),
-    ...idleCaches.map(({ queryKey }) => qc.cancelQueries({ queryKey, exact: true })
-      .then(() => qc.invalidateQueries({ queryKey, exact: true }))),
+    qc.cancelQueries(idleCaches).then(() => qc.invalidateQueries(idleCaches)),
   ]);
 }
 

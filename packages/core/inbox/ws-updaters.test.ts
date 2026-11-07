@@ -187,7 +187,7 @@ describe("syncInboxBusyIssues", () => {
 
   it("re-reads the active facets and idle-filtered pages and lookups when the busy issues change, and nothing a task cannot change", async () => {
     const qc = new QueryClient();
-    await syncInboxBusyIssues(qc, wsId, ["issue-1"], 0);
+    await syncInboxBusyIssues(qc, wsId, ["issue-1"]);
     const keys = {
       idlePages: inboxPagesOptions(wsId, idle).queryKey,
       idleUnreadPages: inboxPagesOptions(wsId, { ...idle, unreadOnly: true }).queryKey,
@@ -200,7 +200,7 @@ describe("syncInboxBusyIssues", () => {
     };
     for (const key of Object.values<QueryKey>(keys)) qc.setQueryData(key, {});
 
-    await syncInboxBusyIssues(qc, wsId, ["issue-2", "issue-1"], 0);
+    await syncInboxBusyIssues(qc, wsId, ["issue-2", "issue-1"]);
 
     expect(invalidatedOf(qc, keys)).toEqual({
       idlePages: true, idleUnreadPages: true, idleLookup: true, facets: true,
@@ -210,48 +210,45 @@ describe("syncInboxBusyIssues", () => {
 
   it("re-reads nothing while the busy issues stay the same, whatever their order", async () => {
     const qc = new QueryClient();
-    await syncInboxBusyIssues(qc, wsId, ["issue-1", "issue-2"], 0);
+    await syncInboxBusyIssues(qc, wsId, ["issue-1", "issue-2"]);
     const keys = { idlePages: inboxPagesOptions(wsId, idle).queryKey, facets: inboxFacetsOptions(wsId, idle).queryKey };
     for (const key of Object.values<QueryKey>(keys)) qc.setQueryData(key, {});
 
-    await syncInboxBusyIssues(qc, wsId, ["issue-2", "issue-1"], 0);
+    await syncInboxBusyIssues(qc, wsId, ["issue-2", "issue-1"]);
 
     expect(invalidatedOf(qc, keys)).toEqual({ idlePages: false, facets: false });
   });
 
-  it("without a record, re-reads only the idle caches read before the snapshot that showed the busy issues", async () => {
-    // A page loaded before the first task snapshot arrived may predate a task
-    // event; one read after it, or still on its first load, asked the server later.
+  it("treats a first sight as a change, cancelling an idle cache's first load so it restarts", async () => {
+    // Its first request may have read the server before a task event that the
+    // snapshot's own first request then absorbed.
     const qc = new QueryClient();
-    const keys = {
-      before: inboxPagesOptions(wsId, idle).queryKey,
-      after: inboxPagesOptions(wsId, { ...idle, unreadOnly: true }).queryKey,
-      loading: inboxPagesOptions(wsId, { ...idle, statuses: ["todo"] }).queryKey,
-    };
-    qc.setQueryData<unknown>(keys.before, {}, { updatedAt: 100 });
-    qc.setQueryData<unknown>(keys.after, {}, { updatedAt: 300 });
-    void qc.prefetchQuery({ queryKey: keys.loading, queryFn: () => new Promise(() => {}) });
+    const keys = { loaded: inboxPagesOptions(wsId, idle).queryKey, loading: inboxPagesOptions(wsId, { ...idle, unreadOnly: true }).queryKey };
+    qc.setQueryData<unknown>(keys.loaded, {});
+    const firstLoad = vi.fn(() => new Promise(() => {}));
+    void qc.prefetchQuery({ queryKey: keys.loading, queryFn: firstLoad });
 
-    await syncInboxBusyIssues(qc, wsId, ["issue-1"], 200);
+    await syncInboxBusyIssues(qc, wsId, ["issue-1"]);
 
-    expect(invalidatedOf(qc, keys)).toEqual({ before: true, after: false, loading: false });
-    expect(qc.getQueryState(keys.loading)?.fetchStatus).toBe("fetching");
+    expect(invalidatedOf(qc, keys)).toEqual({ loaded: true, loading: true });
+    expect(qc.getQueryState(keys.loading)?.fetchStatus).toBe("idle");
   });
 
   it("keeps the record across inbox page lifetimes, one per query client", async () => {
     const qc = new QueryClient();
     const key = inboxPagesOptions(wsId, idle).queryKey;
-    await syncInboxBusyIssues(qc, wsId, ["issue-1"], 0);
-    qc.setQueryData<unknown>(key, {}, { updatedAt: 100 });
+    await syncInboxBusyIssues(qc, wsId, ["issue-1"]);
+    qc.setQueryData<unknown>(key, {});
 
     // The page unmounted, the task ended, and a new page sees the snapshot.
-    await syncInboxBusyIssues(qc, wsId, [], 50);
+    await syncInboxBusyIssues(qc, wsId, []);
     expect(qc.getQueryState(key)?.isInvalidated).toBe(true);
 
-    // Another client has no record yet, and its cache is newer than the snapshot.
+    // Another client keeps its own record.
     const other = new QueryClient();
-    other.setQueryData<unknown>(key, {}, { updatedAt: 100 });
-    await syncInboxBusyIssues(other, wsId, [], 50);
+    await syncInboxBusyIssues(other, wsId, []);
+    other.setQueryData<unknown>(key, {});
+    await syncInboxBusyIssues(other, wsId, []);
     expect(other.getQueryState(key)?.isInvalidated).toBe(false);
   });
 });

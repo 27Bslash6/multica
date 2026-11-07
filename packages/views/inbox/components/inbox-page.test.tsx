@@ -340,19 +340,6 @@ describe("InboxPage", () => {
     expect(screen.queryByTestId("row")).toBeNull();
   });
 
-  it("hands each task snapshot's busy issues, by the activity badge's rule, to the idle re-read", () => {
-    reset();
-    listData.tasks = [
-      { id: "task-a", agent_id: "agent-1", issue_id: "issue-a", status: "queued" },
-      { id: "task-b", agent_id: "agent-1", issue_id: "issue-b", status: "completed" },
-    ] as AgentTask[];
-    const { rerender } = render(<InboxPage />);
-    expect(syncInboxBusyIssues).toHaveBeenLastCalledWith(queryClient, "workspace-1", ["issue-a"], undefined);
-    listData.tasks = [{ id: "task-a", agent_id: "agent-1", issue_id: "issue-a", status: "completed" }] as AgentTask[];
-    rerender(<InboxPage />);
-    expect(syncInboxBusyIssues).toHaveBeenLastCalledWith(queryClient, "workspace-1", [], undefined);
-  });
-
   it("keeps the list subordinate to the detail pane on desktop", () => {
     reset();
     layout.width = DESKTOP;

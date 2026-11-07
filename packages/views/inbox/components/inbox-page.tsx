@@ -192,25 +192,22 @@ export function InboxPage() {
     () => (isArchivedView ? inboxFiltersForArchive(filters) : filters),
     [filters, isArchivedView],
   );
-  // The open row survives the unread and idle dimensions while it stays
-  // selected; see the pin refs above. Each pin is passed separately so it
-  // only crosses its own dimension.
+  // The open row survives the unread dimension while it stays selected; see
+  // the pin ref above.
   const pinnedUnreadKey =
     filters.unreadOnly && pinnedUnreadKeyRef.current === selectedKey
       ? selectedKey
       : null;
+  const filterContext = useMemo(() => ({ pinnedUnreadKey }), [pinnedUnreadKey]);
+  // Only the server judges the idle dimension: a task snapshot read across a
+  // task event can be stale, and judging rows by it would hide a row the server
+  // just listed. The open row survives the server's idle pages through its
+  // unfiltered lookup while it stays selected; see the pin ref above.
   const pinnedIdleKey =
     effectiveFilters.idleOnly && pinnedIdleKeyRef.current === selectedKey
       ? selectedKey
       : null;
   const pinnedKey = pinnedUnreadKey ?? pinnedIdleKey;
-  // No task snapshot here: only the server decides which groups are idle. A
-  // snapshot read across a task event can be stale, and judging rows by it
-  // would hide a row the server just listed as idle.
-  const filterContext = useMemo(
-    () => ({ pinnedUnreadKey, pinnedIdleKey }),
-    [pinnedUnreadKey, pinnedIdleKey],
-  );
   // Re-applied locally so an optimistic patch (a row read under "unread
   // only", an issue moved out of a status) leaves the list at once.
   const filteredItems = useMemo(
@@ -327,13 +324,16 @@ export function InboxPage() {
   // so the URL still resolves to something meaningful. But if the key was
   // previously resolvable (e.g. the issue was just deleted in another tab
   // and `onInboxIssueDeleted` pruned the cache), the issue detail would 404
-  // too — clear the selection and stay on /inbox instead.
+  // too — clear the selection and stay on /inbox instead. Under the idle
+  // filter the lookup is filtered too, so a miss may only mean the group is
+  // busy or has no issue: the filter hides it, which clears the selection.
+  const idleLookupMiss = effectiveFilters.idleOnly;
   useEffect(() => {
     if (viewLoading || lookupLoading || lookupError || viewError) return;
     if (!selectedKey) return;
     if (selected) return;
     if (selectionFilteredOut) return;
-    if (lastResolvedKeyRef.current === selectedKey) {
+    if (lastResolvedKeyRef.current === selectedKey || idleLookupMiss) {
       setSelectedKey("");
       return;
     }
@@ -346,6 +346,7 @@ export function InboxPage() {
     selectedKey,
     selected,
     selectionFilteredOut,
+    idleLookupMiss,
     replace,
     wsPaths,
     setSelectedKey,
@@ -449,10 +450,12 @@ export function InboxPage() {
 
   // `selected` only exists once the open row passed every filter, and the
   // server lists a row under the idle filter only while its issue is idle, so
-  // this pins a row that was idle when the user opened it. Rows still shown
-  // from the previous selection's pages while the idle one loads prove nothing.
+  // this pins a row that was idle when the user opened it. Rows that prove
+  // nothing: the previous selection's pages shown while the idle one loads,
+  // and an idle page held from earlier that a task change invalidated (with an
+  // infinite stale time, stale means invalidated).
   const idleOnlyActive = effectiveFilters.idleOnly;
-  const idleRowsFromServer = idleOnlyActive && !activeQuery.isPlaceholderData;
+  const idleRowsFromServer = idleOnlyActive && !activeQuery.isPlaceholderData && !activeQuery.isStale;
   useEffect(() => {
     if (!idleRowsFromServer || !selected || pinnedIdleKeyRef.current === selectedKey) return;
     pinnedIdleKeyRef.current = selectedKey;
@@ -472,14 +475,14 @@ export function InboxPage() {
   // The task snapshot only says when to ask the server again: when the issues
   // an agent is running or queued on (the activity badge's rule) differ from
   // those the idle caches were read under. See `syncInboxBusyIssues`.
-  const { data: taskSnapshot, dataUpdatedAt: taskSnapshotAt } = useQuery(agentTaskSnapshotOptions(wsId));
+  const { data: taskSnapshot } = useQuery(agentTaskSnapshotOptions(wsId));
   const busyIssueIds = useMemo(
     () => taskSnapshot && [...deriveIssueSurfaceActivity(taskSnapshot).activityByIssueId.keys()],
     [taskSnapshot],
   );
   useEffect(() => {
-    if (busyIssueIds) void syncInboxBusyIssues(queryClient, wsId, busyIssueIds, taskSnapshotAt);
-  }, [busyIssueIds, taskSnapshotAt, queryClient, wsId]);
+    if (busyIssueIds) void syncInboxBusyIssues(queryClient, wsId, busyIssueIds);
+  }, [busyIssueIds, queryClient, wsId]);
 
   const writeViewState = useViewStateWriter();
   // Bumped when the already-open notification row is re-clicked; threaded to
