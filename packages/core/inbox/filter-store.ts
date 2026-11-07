@@ -12,8 +12,8 @@ export interface InboxFilters {
 }
 
 /**
- * The dimensions the server-filtered views understand. They have no idle
- * dimension, so `idleOnly` never reaches their endpoints or query keys.
+ * The dimensions the server-filtered archive understands. It has no idle
+ * dimension, so `idleOnly` never reaches its endpoints or query keys.
  */
 export type ArchivedInboxFilters = Omit<InboxFilters, "idleOnly">;
 

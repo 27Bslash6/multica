@@ -7,7 +7,10 @@ import {
   deduplicateArchivedInboxItems,
   deduplicateInboxItems,
   hasOtherWorkspaceUnread,
+  inboxFacetsOptions,
   inboxKeys,
+  inboxLookupOptions,
+  inboxPagesOptions,
   unreadCountForWorkspace,
   unreadWorkspaceIds,
 } from "./queries";
@@ -150,6 +153,16 @@ describe("archived inbox options", () => {
     expect(archivedInboxFacetsOptions("ws", idle).queryKey).toEqual(
       archivedInboxFacetsOptions("ws", EMPTY_INBOX_FILTERS).queryKey,
     );
+  });
+});
+
+describe("active inbox options", () => {
+  it("keys the active pages, lookups and facets by the idle selection, which the server filters on", () => {
+    const idle: InboxFilters = { ...EMPTY_INBOX_FILTERS, idleOnly: true };
+
+    expect(inboxPagesOptions("ws", idle).queryKey).not.toEqual(inboxPagesOptions("ws", EMPTY_INBOX_FILTERS).queryKey);
+    expect(inboxLookupOptions("ws", "group", idle).queryKey).not.toEqual(inboxLookupOptions("ws", "group").queryKey);
+    expect(inboxFacetsOptions("ws", idle).queryKey).not.toEqual(inboxFacetsOptions("ws", EMPTY_INBOX_FILTERS).queryKey);
   });
 });
 
