@@ -685,3 +685,19 @@ it("does not re-read the idle pages when the task snapshot changes order but not
   ] as AgentTask[]));
   expect(pageReads()).toBe(before);
 });
+
+it("shows the load error and no pending selection when a deep link's first page fails", async () => {
+  // The lookup waits for the page, so it is pending without a request of its
+  // own; the error card is the page's whole answer.
+  const listInboxPage = vi.fn(async (_filters: InboxFilters, _options: { groupId?: string }) => {
+    throw new Error("offline");
+  });
+  setApiInstance({ listInboxPage, getInboxUnreadSummary: async () => [] } as unknown as ApiClient);
+  searchParams = new URLSearchParams("issue=issue-a");
+  const { container } = renderPage();
+
+  await waitFor(() => expect(container.querySelector(".py-16 button")).not.toBeNull());
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(listInboxPage.mock.calls.some(([, options]) => options?.groupId)).toBe(false);
+  expect(replace).not.toHaveBeenCalled();
+});

@@ -309,8 +309,10 @@ export function InboxPage() {
   const needsLookup = !!selectedKey && !selectedOnPage;
   // Pending, not loading: an inbox write cancels a lookup still on its first
   // load, which leaves it without an answer until the write settles and
-  // re-reads it. Without an answer there is nothing to fall back from.
-  const lookupLoading = needsLookup && lookup.isPending;
+  // re-reads it. Without an answer there is nothing to fall back from. A lookup
+  // held back by the view's own load or load error is pending too, and is not
+  // what the page is waiting on.
+  const lookupLoading = needsLookup && !viewLoading && !viewError && lookup.isPending;
   const lookupError = needsLookup && lookup.isError && !selected;
 
   // Shared inbox links (?issue=<id>) may point to notifications not in this
