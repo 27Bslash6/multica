@@ -42,7 +42,7 @@ import {
   useArchiveCompletedInbox,
   useRetrySourceContextQuickCreate,
 } from "@multica/core/inbox/mutations";
-import { syncInboxBusyIssues } from "@multica/core/inbox/ws-updaters";
+import { onInboxBusyIssuesChange } from "@multica/core/inbox/ws-updaters";
 import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import {
   filterInboxItems,
@@ -192,6 +192,7 @@ export function InboxPage() {
     () => (isArchivedView ? inboxFiltersForArchive(filters) : filters),
     [filters, isArchivedView],
   );
+  const idleOnlyActive = effectiveFilters.idleOnly;
   // The open row survives the unread dimension while it stays selected; see
   // the pin ref above.
   const pinnedUnreadKey =
@@ -204,7 +205,7 @@ export function InboxPage() {
   // just listed. The open row survives the server's idle pages through its
   // unfiltered lookup while it stays selected; see the pin ref above.
   const pinnedIdleKey =
-    effectiveFilters.idleOnly && pinnedIdleKeyRef.current === selectedKey
+    idleOnlyActive && pinnedIdleKeyRef.current === selectedKey
       ? selectedKey
       : null;
   const pinnedKey = pinnedUnreadKey ?? pinnedIdleKey;
@@ -219,14 +220,20 @@ export function InboxPage() {
   // A deep link can point beyond every loaded page. Resolve its group directly
   // without adding it to the cursor chain or mistaking a page miss for a 404.
   // Under the idle filter the lookup asks the server for an idle group, like
-  // the pages; only the pinned open row is read unfiltered, so it stays after
+  // the pages, and it is stale at once, so it asks again whenever it mounts or
+  // becomes enabled: an answer from an earlier visit says nothing about the
+  // issue now. Only the pinned open row is read unfiltered, so it stays after
   // an agent starts on its issue.
+  const idleLookup = idleOnlyActive && !pinnedIdleKey;
   const lookup = useQuery({
     ...(isArchivedView
       ? archivedInboxLookupOptions(wsId, selectedKey)
-      : inboxLookupOptions(wsId, selectedKey, effectiveFilters.idleOnly && !pinnedIdleKey ? IDLE_LOOKUP_FILTERS : EMPTY_INBOX_FILTERS)),
+      : inboxLookupOptions(wsId, selectedKey, idleLookup ? IDLE_LOOKUP_FILTERS : EMPTY_INBOX_FILTERS)),
     enabled: !!selectedKey && !selectedOnPage && !viewQuery.isLoading && !viewError,
+    ...(idleLookup ? { staleTime: 0 } : {}),
   });
+  // Whether the idle lookup's answer was read during this mount.
+  const idleLookupCurrent = !idleLookup || lookup.isFetchedAfterMount;
   const lookupItems = useMemo(() => (isArchivedView ? deduplicateArchivedInboxItems : deduplicateInboxItems)(
     lookup.data?.items ?? [],
   ), [isArchivedView, lookup.data]);
@@ -325,15 +332,16 @@ export function InboxPage() {
   // previously resolvable (e.g. the issue was just deleted in another tab
   // and `onInboxIssueDeleted` pruned the cache), the issue detail would 404
   // too — clear the selection and stay on /inbox instead. Under the idle
-  // filter the lookup is filtered too, so a miss may only mean the group is
-  // busy or has no issue: the filter hides it, which clears the selection.
-  const idleLookupMiss = effectiveFilters.idleOnly;
+  // filter the lookup is filtered too, so a miss read during this mount may
+  // only mean the group is busy or has no issue: the filter hides it, which
+  // clears the selection. A miss kept from an earlier visit decides nothing.
   useEffect(() => {
     if (viewLoading || lookupLoading || lookupError || viewError) return;
     if (!selectedKey) return;
     if (selected) return;
     if (selectionFilteredOut) return;
-    if (lastResolvedKeyRef.current === selectedKey || idleLookupMiss) {
+    if (needsLookup && !idleLookupCurrent) return;
+    if (lastResolvedKeyRef.current === selectedKey || idleOnlyActive) {
       setSelectedKey("");
       return;
     }
@@ -346,7 +354,9 @@ export function InboxPage() {
     selectedKey,
     selected,
     selectionFilteredOut,
-    idleLookupMiss,
+    needsLookup,
+    idleLookupCurrent,
+    idleOnlyActive,
     replace,
     wsPaths,
     setSelectedKey,
@@ -451,11 +461,12 @@ export function InboxPage() {
   // `selected` only exists once the open row passed every filter, and the
   // server lists a row under the idle filter only while its issue is idle, so
   // this pins a row that was idle when the user opened it. Rows that prove
-  // nothing: the previous selection's pages shown while the idle one loads,
-  // and an idle page held from earlier that a task change invalidated (with an
-  // infinite stale time, stale means invalidated).
-  const idleOnlyActive = effectiveFilters.idleOnly;
-  const idleRowsFromServer = idleOnlyActive && !activeQuery.isPlaceholderData && !activeQuery.isStale;
+  // nothing: the previous filter's pages shown while the idle one loads, an
+  // idle page held from earlier that a task change invalidated (with an
+  // infinite stale time, stale means invalidated), and a lookup answer from an
+  // earlier visit.
+  const idleRowsFromServer = idleOnlyActive && !activeQuery.isPlaceholderData && !activeQuery.isStale &&
+    (!!selectedOnPage || idleLookupCurrent);
   useEffect(() => {
     if (!idleRowsFromServer || !selected || pinnedIdleKeyRef.current === selectedKey) return;
     pinnedIdleKeyRef.current = selectedKey;
@@ -472,17 +483,24 @@ export function InboxPage() {
     if (!unreadOnlyActive) pinnedUnreadKeyRef.current = null;
   }, [unreadOnlyActive]);
 
-  // The task snapshot only says when to ask the server again: when the issues
-  // an agent is running or queued on (the activity badge's rule) differ from
-  // those the idle caches were read under. See `syncInboxBusyIssues`.
+  // The task snapshot only says when to ask the server again: on this mount's
+  // first snapshot, and whenever the issues an agent is running or queued on
+  // (the activity badge's rule) change. Each mount asks once, because a task
+  // that ended while the inbox was closed often sends no inbox event, and the
+  // cached idle pages and snapshot may both predate it.
   const { data: taskSnapshot } = useQuery(agentTaskSnapshotOptions(wsId));
-  const busyIssueIds = useMemo(
-    () => taskSnapshot && [...deriveIssueSurfaceActivity(taskSnapshot).activityByIssueId.keys()],
+  const busyIssues = useMemo(
+    () => taskSnapshot && [...deriveIssueSurfaceActivity(taskSnapshot).activityByIssueId.keys()].sort().join(","),
     [taskSnapshot],
   );
+  const readBusyIssuesRef = useRef<string | null>(null);
   useEffect(() => {
-    if (busyIssueIds) void syncInboxBusyIssues(queryClient, wsId, busyIssueIds);
-  }, [busyIssueIds, queryClient, wsId]);
+    if (busyIssues === undefined) return;
+    const read = `${wsId}:${busyIssues}`;
+    if (readBusyIssuesRef.current === read) return;
+    readBusyIssuesRef.current = read;
+    void onInboxBusyIssuesChange(queryClient, wsId);
+  }, [busyIssues, queryClient, wsId]);
 
   const writeViewState = useViewStateWriter();
   // Bumped when the already-open notification row is re-clicked; threaded to

@@ -6,8 +6,8 @@ import type { AgentTask, InboxItem } from "@multica/core/types";
 import { useInboxFilterStore } from "@multica/core/inbox/filter-store";
 import { InboxPage } from "./inbox-page";
 
-const syncInboxBusyIssues = vi.hoisted(() => vi.fn());
-vi.mock("@multica/core/inbox/ws-updaters", () => ({ syncInboxBusyIssues }));
+const onInboxBusyIssuesChange = vi.hoisted(() => vi.fn());
+vi.mock("@multica/core/inbox/ws-updaters", () => ({ onInboxBusyIssuesChange }));
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -294,7 +294,7 @@ function reset() {
   listData.archived = [];
   listData.lookup = undefined;
   listData.tasks = [];
-  syncInboxBusyIssues.mockClear();
+  onInboxBusyIssuesChange.mockClear();
   lookupState.isLoading = false;
   lookupState.isError = false;
   lookupState.refetch.mockClear();

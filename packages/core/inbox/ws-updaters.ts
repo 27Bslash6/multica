@@ -188,36 +188,21 @@ export async function onInboxInvalidate(qc: QueryClient, wsId: string) {
   await refreshInboxQuery(qc, inboxKeys.all(wsId));
 }
 
-// The busy issues (an agent running or queued on them) each query client last
-// saw per workspace. The record outlives the inbox page: a task that ends while
-// the inbox is closed often sends no inbox event, so a return visit compares
-// the current busy issues against what the cached idle pages were read under,
-// not against the snapshot it mounts with.
-const seenBusyIssues = new WeakMap<QueryClient, Map<string, string>>();
-
 /**
- * Re-read what a change in busy issues can change: the active facets, and the
- * active pages and lookups filtered to idle groups. The server decides which
- * groups are idle, so only a re-read lists a group that went idle. No other
- * cache depends on task state.
- *
- * A first sight counts as a change: an idle cache may have been read, or may
- * still be loading, from before a task event the snapshot already absorbed.
- * Cancelling first restarts such a load.
+ * Re-read what the busy issues (those an agent is running or queued on) can
+ * change: the active facets, and the active pages and lookups filtered to idle
+ * groups. The server decides which groups are idle, so only a re-read lists a
+ * group that went idle. No other cache depends on task state. Cancelling first
+ * restarts a load that may have read the server before a task event.
  */
-export async function syncInboxBusyIssues(qc: QueryClient, wsId: string, busyIssueIds: Iterable<string>) {
-  const busyIssues = [...busyIssueIds].sort().join(",");
-  let seen = seenBusyIssues.get(qc);
-  if (!seen) seenBusyIssues.set(qc, (seen = new Map()));
-  if (seen.get(wsId) === busyIssues) return;
-  seen.set(wsId, busyIssues);
-  const idleCaches = {
+export async function onInboxBusyIssuesChange(qc: QueryClient, wsId: string) {
+  const idleQueries = {
     queryKey: inboxKeys.list(wsId),
     predicate: (query: Query) => (query.queryKey.at(-1) as Partial<InboxFilters> | undefined)?.idleOnly === true,
   };
   await Promise.all([
     refreshInboxQuery(qc, inboxKeys.listFacets(wsId)),
-    qc.cancelQueries(idleCaches).then(() => qc.invalidateQueries(idleCaches)),
+    qc.cancelQueries(idleQueries).then(() => qc.invalidateQueries(idleQueries)),
   ]);
 }
 
